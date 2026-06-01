@@ -1,3 +1,31 @@
+Players = game:GetService("Players")
+Workspace = game:GetService("Workspace")
+ReplicatedStorage = game:GetService("ReplicatedStorage")
+ServerStorage = game:GetService("ServerStorage")
+RunService = game:GetService("RunService")
+TweenService = game:GetService("TweenService")
+TeleportService = game:GetService("TeleportService")
+UserInputService = game:GetService("UserInputService")
+VirtualUser = game:GetService("VirtualUser")
+ContextActionService = game:GetService("ContextActionService")
+GuiService = game:GetService("GuiService")
+CoreGui = game:GetService("CoreGui")
+HttpService = game:GetService("HttpService")
+SoundService = game:GetService("SoundService")
+Lighting = game:GetService("Lighting")
+PhysicsService = game:GetService("PhysicsService")
+PathfindingService = game:GetService("PathfindingService")
+LocalizationService = game:GetService("LocalizationService")
+Debris = game:GetService("Debris")
+
+killersFolder = Workspace:WaitForChild("Players"):WaitForChild("Killers")
+survivorsFolder = Workspace:WaitForChild("Players"):WaitForChild("Survivors")
+localPlayer = Players.LocalPlayer
+playerCharacter = localPlayer.Character or localPlayer.CharacterAdded:Wait()
+
+localPlayer.CharacterAdded:Connect(function(character)
+    playerCharacter = character
+end)
 -- =========================================================================
 -- HUTAOHUB ESP BACKEND CORE SYSTEM
 -- =========================================================================
