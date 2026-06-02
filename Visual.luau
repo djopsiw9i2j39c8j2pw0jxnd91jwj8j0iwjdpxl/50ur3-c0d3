@@ -26,9 +26,7 @@ playerCharacter = localPlayer.Character or localPlayer.CharacterAdded:Wait()
 localPlayer.CharacterAdded:Connect(function(character)
     playerCharacter = character
 end)
--- =========================================================================
--- HUTAOHUB ESP BACKEND CORE SYSTEM
--- =========================================================================
+
 if getgenv().HutaoESPSystem then
     -- Nếu hệ thống đã chạy ngầm trước đó, tiến hành dọn dẹp kết nối cũ để tránh rò rỉ bộ nhớ
     local oldSys = getgenv().HutaoESPSystem
@@ -53,7 +51,7 @@ getgenv().HutaoESPSystem = {
     Cache = { CachedRoot = nil, CleanupTick = 0 },
     
     Config = {
-        FONT_SIZE = 12, HEARTBEAT_RATE = 0.15, DISTANCE_RATE = 0.15,
+        FONT_SIZE = 12, HEARTBEAT_RATE = 0.1, DISTANCE_RATE = 0.1,
         GENERATOR_DUPLICATE_RADIUS = 10,
         CLONE_IGNORE_POSITION = Vector3.new(-3552.90, 11.88, 267.95), CLONE_IGNORE_RADIUS = 500
     },
@@ -71,6 +69,67 @@ getgenv().HutaoESPSystem = {
 }
 
 local Sys = getgenv().HutaoESPSystem
+
+-- ==========================================
+-- ITEM RADAR CACHE
+-- ==========================================
+
+Sys.ItemRadar = {
+    Cache = {}
+}
+
+function Sys.ItemRadar.Scan(obj)
+    if not obj:IsA("ProximityPrompt") then
+        return
+    end
+
+    local itemRoot = obj.Parent
+    if not itemRoot or itemRoot.Name ~= "ItemRoot" then
+        return
+    end
+
+    local item = itemRoot.Parent
+    if not item or not item:IsA("Tool") then
+        return
+    end
+
+    Sys.ItemRadar.Cache[item] = obj
+end
+
+function Sys.ItemRadar.GetItems()
+    local items = {}
+
+    for item, prompt in pairs(Sys.ItemRadar.Cache) do
+        if item
+        and item.Parent
+        and prompt
+        and prompt.Parent
+        and prompt.Enabled then
+
+            table.insert(items, item)
+        else
+            Sys.ItemRadar.Cache[item] = nil
+        end
+    end
+
+    return items
+end
+
+task.spawn(function()
+    for _, obj in ipairs(Workspace:GetDescendants()) do
+        Sys.ItemRadar.Scan(obj)
+    end
+end)
+
+table.insert(Sys.System.Connections,
+    Workspace.DescendantAdded:Connect(function(obj)
+        task.defer(function()
+            if obj and obj.Parent then
+                Sys.ItemRadar.Scan(obj)
+            end
+        end)
+    end)
+)
 
 -- ==========================================
 -- UTILS UTILITIES (HÀM BỔ TRỢ PHẲNG)
@@ -240,10 +299,10 @@ end
 
 function Sys.Internal.ScanEnvironment(id, config)
     local watchFolder = (id == "Generator" or id == "FakeGenerator" or id == "Item") and Sys.Internal.GetDynamicMapFolder() or config.WatchFolder
-    if id == "Item" and watchFolder then
-        for _, obj in ipairs(watchFolder:GetDescendants()) do
-            if obj:IsA("Tool") then Sys.Internal.ValidateAndCreate(id, obj, config) end
-        end
+    if id == "Item" then
+       for _, obj in ipairs(Sys.ItemRadar.GetItems()) do
+           Sys.Internal.ValidateAndCreate(id, obj, config)
+       end
     else
         local descendants = Workspace:GetDescendants()
         for i, obj in ipairs(descendants) do
@@ -281,12 +340,24 @@ Sys.System.GlobalScanLoop = task.spawn(function()
 end)
 
 table.insert(Sys.System.Connections, Workspace.DescendantAdded:Connect(function(obj)
-    if obj:IsA("Tool") then
-        local itemRoot = obj:FindFirstChild("ItemRoot")
-        if itemRoot and itemRoot:FindFirstChild("ProximityPrompt") and Sys.System.Enabled["Item"] then
-            local itemConfig = Sys.ConfigsMap["Item"]
-            if itemConfig then Sys.Internal.ValidateAndCreate("Item", obj, itemConfig) end
-        end
+    if obj:IsA("ProximityPrompt") then
+        task.defer(function()
+            Sys.ItemRadar.Scan(obj)
+
+            local item = obj.Parent and obj.Parent.Parent
+
+            if item
+            and Sys.System.Enabled["Item"]
+            and Sys.ItemRadar.Cache[item] then
+
+               local itemConfig = Sys.ConfigsMap["Item"]
+
+               if itemConfig then
+                  Sys.Internal.ValidateAndCreate("Item", item, itemConfig)
+               end
+            end
+        end)
+
         return
     end
     if not obj:IsA("Model") then return end
@@ -343,8 +414,10 @@ Sys.System.LogicScanLoop = task.spawn(function()
                     end
                 end
                 if data.Config.Item then
-                    local itemRoot = object:FindFirstChild("ItemRoot")
-                    if not itemRoot or not itemRoot:FindFirstChild("ProximityPrompt") then Sys.Internal.RemoveESP(id, object) continue end
+                    if not Sys.ItemRadar.Cache[object] then
+                        Sys.Internal.RemoveESP(id, object)
+                        continue
+                    end
                 end
             end
         end
@@ -451,12 +524,12 @@ function Sys.Validators.Generator(obj)
     end
     return true
 end
-function Sys.Validators.Item(obj) if not obj or not obj:IsA("Tool") then return false end local r = obj:FindFirstChild("ItemRoot") return r and r:FindFirstChild("ProximityPrompt") ~= nil end
+function Sys.Validators.Item(obj)
+    return Sys.ItemRadar.Cache[obj] ~= nil
+end
 function Sys.Validators.Dispenser(obj) return obj and obj:IsA("Model") and obj.Name:lower():find("dispenser") and not Sys.Utils.isLocalCharacter(obj) and Sys.Utils.getRoot(obj) end
 function Sys.Validators.Sentry(obj) return obj and obj:IsA("Model") and obj.Name:lower():find("sentry") and not Sys.Utils.isLocalCharacter(obj) and Sys.Utils.getRoot(obj) end
 function Sys.Validators.Trap(obj) return obj and obj:IsA("Model") and obj.Name:find("TaphTripwire") and not Sys.Utils.isLocalCharacter(obj) and Sys.Utils.getRoot(obj) end
 function Sys.Validators.Subspace(obj) return obj and obj:IsA("Model") and obj.Name == "SubspaceTripmine" and not Sys.Utils.isLocalCharacter(obj) and Sys.Utils.getRoot(obj) end
 function Sys.Validators.JohnDoeTrap(obj) local n = obj.Name:lower() return obj and (n == "shadow" or n:find("shadow")) and not Sys.Utils.isLocalCharacter(obj) and Sys.Utils.getRoot(obj) end
 function Sys.Validators.FakeGenerator(obj) if not obj or not obj:IsA("Model") or obj.Name ~= "FakeGenerator" then return false end local m = Sys.Internal.GetDynamicMapFolder() return m and obj:IsDescendantOf(m) and Sys.Utils.getRoot(obj) ~= nil end
-
-print("HutaoESP Backend Loaded Successfully via getgenv()!")
