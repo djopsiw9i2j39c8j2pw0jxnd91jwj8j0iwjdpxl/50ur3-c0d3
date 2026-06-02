@@ -28,7 +28,6 @@ localPlayer.CharacterAdded:Connect(function(character)
 end)
 
 if getgenv().HutaoESPSystem then
-    -- Nếu hệ thống đã chạy ngầm trước đó, tiến hành dọn dẹp kết nối cũ để tránh rò rỉ bộ nhớ
     local oldSys = getgenv().HutaoESPSystem
     if oldSys.System.GlobalScanLoop then task.cancel(oldSys.System.GlobalScanLoop) end
     if oldSys.System.LogicScanLoop then task.cancel(oldSys.System.LogicScanLoop) end
@@ -70,70 +69,6 @@ getgenv().HutaoESPSystem = {
 
 local Sys = getgenv().HutaoESPSystem
 
--- ==========================================
--- ITEM RADAR CACHE
--- ==========================================
-
-Sys.ItemRadar = {
-    Cache = {}
-}
-
-function Sys.ItemRadar.Scan(obj)
-    if not obj:IsA("ProximityPrompt") then
-        return
-    end
-
-    local itemRoot = obj.Parent
-    if not itemRoot or itemRoot.Name ~= "ItemRoot" then
-        return
-    end
-
-    local item = itemRoot.Parent
-    if not item or not item:IsA("Tool") then
-        return
-    end
-
-    Sys.ItemRadar.Cache[item] = obj
-end
-
-function Sys.ItemRadar.GetItems()
-    local items = {}
-
-    for item, prompt in pairs(Sys.ItemRadar.Cache) do
-        if item
-        and item.Parent
-        and prompt
-        and prompt.Parent
-        and prompt.Enabled then
-
-            table.insert(items, item)
-        else
-            Sys.ItemRadar.Cache[item] = nil
-        end
-    end
-
-    return items
-end
-
-task.spawn(function()
-    for _, obj in ipairs(Workspace:GetDescendants()) do
-        Sys.ItemRadar.Scan(obj)
-    end
-end)
-
-table.insert(Sys.System.Connections,
-    Workspace.DescendantAdded:Connect(function(obj)
-        task.defer(function()
-            if obj and obj.Parent then
-                Sys.ItemRadar.Scan(obj)
-            end
-        end)
-    end)
-)
-
--- ==========================================
--- UTILS UTILITIES (HÀM BỔ TRỢ PHẲNG)
--- ==========================================
 function Sys.Utils.getCharacter() return localPlayer.Character end
 function Sys.Utils.getRoot(model)
     if not model then return nil end
@@ -184,9 +119,6 @@ function Sys.Utils.getModelVolume(model)
     return size.X * size.Y * size.Z
 end
 
--- ==========================================
--- INTERNAL LOGIC MECHANICS (HÀM XỬ LÝ KHUNG NHÌN)
--- ==========================================
 function Sys.Internal.RemoveESP(id, object)
     local cache = Sys.System.Objects[id]
     if not cache then return end
@@ -288,9 +220,6 @@ function Sys.Internal.ValidateAndCreate(id, obj, config)
     if success and valid then Sys.Internal.CreateESP(id, obj, config) end
 end
 
--- ==========================================
--- THE MAP DISCOVERY INTEGRATION
--- ==========================================
 function Sys.Internal.GetDynamicMapFolder()
     local mapContainer = Workspace:FindFirstChild("Map")
     local ingame = mapContainer and mapContainer:FindFirstChild("Ingame")
@@ -299,10 +228,10 @@ end
 
 function Sys.Internal.ScanEnvironment(id, config)
     local watchFolder = (id == "Generator" or id == "FakeGenerator" or id == "Item") and Sys.Internal.GetDynamicMapFolder() or config.WatchFolder
-    if id == "Item" then
-       for _, obj in ipairs(Sys.ItemRadar.GetItems()) do
-           Sys.Internal.ValidateAndCreate(id, obj, config)
-       end
+    if id == "Item" and watchFolder then
+        for _, obj in ipairs(watchFolder:GetDescendants()) do
+            if obj:IsA("Tool") then Sys.Internal.ValidateAndCreate(id, obj, config) end
+        end
     else
         local descendants = Workspace:GetDescendants()
         for i, obj in ipairs(descendants) do
@@ -315,9 +244,6 @@ function Sys.Internal.ScanEnvironment(id, config)
     end
 end
 
--- ==========================================
--- MAIN THREAD LOOPS & HOOKS (HỆ THỐNG VÒNG LẶP CHÍNH)
--- ==========================================
 RunService.Heartbeat:Connect(function()
     local char = Sys.Utils.getCharacter()
     Sys.Cache.CachedRoot = char and Sys.Utils.getRoot(char)
@@ -340,24 +266,12 @@ Sys.System.GlobalScanLoop = task.spawn(function()
 end)
 
 table.insert(Sys.System.Connections, Workspace.DescendantAdded:Connect(function(obj)
-    if obj:IsA("ProximityPrompt") then
-        task.defer(function()
-            Sys.ItemRadar.Scan(obj)
-
-            local item = obj.Parent and obj.Parent.Parent
-
-            if item
-            and Sys.System.Enabled["Item"]
-            and Sys.ItemRadar.Cache[item] then
-
-               local itemConfig = Sys.ConfigsMap["Item"]
-
-               if itemConfig then
-                  Sys.Internal.ValidateAndCreate("Item", item, itemConfig)
-               end
-            end
-        end)
-
+    if obj:IsA("Tool") then
+        local itemRoot = obj:FindFirstChild("ItemRoot")
+        if itemRoot and itemRoot:FindFirstChild("ProximityPrompt") and Sys.System.Enabled["Item"] then
+            local itemConfig = Sys.ConfigsMap["Item"]
+            if itemConfig then Sys.Internal.ValidateAndCreate("Item", obj, itemConfig) end
+        end
         return
     end
     if not obj:IsA("Model") then return end
@@ -414,10 +328,8 @@ Sys.System.LogicScanLoop = task.spawn(function()
                     end
                 end
                 if data.Config.Item then
-                    if not Sys.ItemRadar.Cache[object] then
-                        Sys.Internal.RemoveESP(id, object)
-                        continue
-                    end
+                    local itemRoot = object:FindFirstChild("ItemRoot")
+                    if not itemRoot or not itemRoot:FindFirstChild("ProximityPrompt") then Sys.Internal.RemoveESP(id, object) continue end
                 end
             end
         end
@@ -466,9 +378,6 @@ Sys.System.UpdateLoop = RunService.Heartbeat:Connect(function(delta)
     end
 end)
 
--- ==========================================
--- CONTROLLER ROUTER FOR FRONTEND TOGGLE CALLBACK
--- ==========================================
 function Sys.Internal.RegisterRuntimeConfig(id, data)
     Sys.ConfigsMap[id] = data
     Sys.System.Objects[id] = Sys.System.Objects[id] or {}
@@ -497,9 +406,6 @@ function Sys.Internal.TriggerToggle(id, state)
     end
 end
 
--- ==========================================
--- CORE BASE VALIDATORS
--- ==========================================
 function Sys.Validators.Clone(obj)
     if not obj or not obj:IsA("Model") or Sys.Utils.isLocalCharacter(obj) or obj.Name == "Rig" or Sys.Utils.isExcluded(obj.Name) or Sys.Utils.isSurvivor(obj) or Sys.Utils.isKiller(obj) then return false end
     local h, root = Sys.Utils.getHumanoid(obj), Sys.Utils.getRoot(obj)
@@ -524,12 +430,285 @@ function Sys.Validators.Generator(obj)
     end
     return true
 end
-function Sys.Validators.Item(obj)
-    return Sys.ItemRadar.Cache[obj] ~= nil
-end
+function Sys.Validators.Item(obj) if not obj or not obj:IsA("Tool") then return false end local r = obj:FindFirstChild("ItemRoot") return r and r:FindFirstChild("ProximityPrompt") ~= nil end
 function Sys.Validators.Dispenser(obj) return obj and obj:IsA("Model") and obj.Name:lower():find("dispenser") and not Sys.Utils.isLocalCharacter(obj) and Sys.Utils.getRoot(obj) end
 function Sys.Validators.Sentry(obj) return obj and obj:IsA("Model") and obj.Name:lower():find("sentry") and not Sys.Utils.isLocalCharacter(obj) and Sys.Utils.getRoot(obj) end
 function Sys.Validators.Trap(obj) return obj and obj:IsA("Model") and obj.Name:find("TaphTripwire") and not Sys.Utils.isLocalCharacter(obj) and Sys.Utils.getRoot(obj) end
 function Sys.Validators.Subspace(obj) return obj and obj:IsA("Model") and obj.Name == "SubspaceTripmine" and not Sys.Utils.isLocalCharacter(obj) and Sys.Utils.getRoot(obj) end
 function Sys.Validators.JohnDoeTrap(obj) local n = obj.Name:lower() return obj and (n == "shadow" or n:find("shadow")) and not Sys.Utils.isLocalCharacter(obj) and Sys.Utils.getRoot(obj) end
 function Sys.Validators.FakeGenerator(obj) if not obj or not obj:IsA("Model") or obj.Name ~= "FakeGenerator" then return false end local m = Sys.Internal.GetDynamicMapFolder() return m and obj:IsDescendantOf(m) and Sys.Utils.getRoot(obj) ~= nil end
+
+-- Auto Gen
+
+getgenv().FlowAutoSolve = getgenv().FlowAutoSolve or false
+getgenv().FlowSolveDelay = getgenv().FlowSolveDelay or 0.08
+getgenv().FlowDebug = getgenv().FlowDebug or false
+getgenv().FlowActivePuzzles = getgenv().FlowActivePuzzles or {}
+getgenv().FlowIsDrawing = getgenv().FlowIsDrawing or false
+
+local FlowPathCache = {}
+local FlowUsedCache = {}
+local lastGuiState = false
+local HookedModules = {}
+
+local PlayerGui = localPlayer:WaitForChild("PlayerGui")
+
+local function debugPrint(...)
+    if getgenv().FlowDebug then print("[FLOW DEBUG]:", ...) end
+end
+
+local function safeCall(fn, ...)
+    local ok, res = pcall(fn, ...)
+    if ok then return res end
+    debugPrint("Lỗi thực thi hàm:", res)
+end
+
+getgenv().isFlowGuiVisible = function()
+    local puzzleUI = PlayerGui:FindFirstChild("PuzzleUI")
+    if not (puzzleUI and puzzleUI:IsA("ScreenGui") and puzzleUI.Enabled) then return nil end
+    
+    local container = puzzleUI:FindFirstChild("Container")
+    local gridHolder = container and container:FindFirstChild("GridHolder")
+    local grid = gridHolder and gridHolder:FindFirstChild("Grid")
+    
+    if grid and grid.Visible then return grid end
+    return nil
+end
+
+local function IsPuzzle(tbl)
+    if typeof(tbl) ~= "table" then return false end
+    if rawget(tbl, "Solution") then return true end
+    if rawget(tbl, "paths") and rawget(tbl, "updateGui") then return true end
+    return false
+end
+
+local function getDirection(r1, c1, r2, c2)
+    if r2 < r1 then return "up" end
+    if r2 > r1 then return "down" end
+    if c2 < c1 then return "left" end
+    if c2 > c1 then return "right" end
+end
+
+local function getConnections(prev, curr, nextNode)
+    local connections = {}
+    if prev and curr then
+        local dir = getDirection(curr.row, curr.col, prev.row, prev.col)
+        if dir == "up" then dir = "down"
+        elseif dir == "down" then dir = "up"
+        elseif dir == "left" then dir = "right"
+        elseif dir == "right" then dir = "left" end
+        if dir then connections[dir] = true end
+    end
+    if nextNode and curr then
+        local dir = getDirection(curr.row, curr.col, nextNode.row, nextNode.col)
+        if dir then connections[dir] = true end
+    end
+    return connections
+end
+
+local function isNeighbour(a, b)
+    return math.abs(a.row - b.row) + math.abs(a.col - b.col) == 1
+end
+
+local function findMethod(obj, names)
+    for i = 1, #names do
+        if typeof(obj[names[i]]) == "function" then return obj[names[i]] end
+    end
+end
+
+local function sortPathByRealEnds(unorderedPath)
+    if not unorderedPath or #unorderedPath <= 1 then return unorderedPath end
+
+    table.clear(FlowPathCache)
+    table.clear(FlowUsedCache)
+    
+    for i = 1, #unorderedPath do
+        FlowPathCache[i] = {row = unorderedPath[i].row, col = unorderedPath[i].col}
+    end
+
+    local startNodeIndex = 1
+    for i = 1, #FlowPathCache do
+        local neighbors = 0
+        for j = 1, #FlowPathCache do
+            if i ~= j and isNeighbour(FlowPathCache[i], FlowPathCache[j]) then
+                neighbors = neighbors + 1
+            end
+        end
+        if neighbors == 1 then
+            startNodeIndex = i
+            break
+        end
+    end
+
+    local ordered = { FlowPathCache[startNodeIndex] }
+    FlowUsedCache[startNodeIndex] = true
+
+    for _ = 2, #FlowPathCache do
+        local last = ordered[#ordered]
+        local foundNext = false
+
+        for i = 1, #FlowPathCache do
+            if not FlowUsedCache[i] and isNeighbour(last, FlowPathCache[i]) then
+                table.insert(ordered, FlowPathCache[i])
+                FlowUsedCache[i] = true
+                foundNext = true
+                break
+            end
+        end
+
+        if not foundNext then
+            for i = 1, #FlowPathCache do
+                if not FlowUsedCache[i] then
+                    table.insert(ordered, FlowPathCache[i])
+                    FlowUsedCache[i] = true
+                    break
+                end
+            end
+        end
+    end
+
+    return ordered
+end
+
+getgenv().SolveFlowPuzzle = function(puzzle, targetColorIndex)
+    if not getgenv().FlowAutoSolve or not IsPuzzle(puzzle) or not puzzle.Solution then return end
+    getgenv().FlowIsDrawing = true
+    puzzle.paths = puzzle.paths or {}
+    puzzle.gridConnections = puzzle.gridConnections or {}
+
+    local updateGui = findMethod(puzzle, {"updateGui", "UpdateGui", "Render", "render"})
+    local checkWin = findMethod(puzzle, {"checkForWin", "CheckForWin", "WinCheck"})
+    local indices = targetColorIndex and {targetColorIndex} or {}
+    
+    if #indices == 0 then
+        for i = 1, #puzzle.Solution do table.insert(indices, i) end
+    end
+
+    for idx = 1, #indices do
+        local colorIndex = indices[idx]
+        local ordered = sortPathByRealEnds(puzzle.Solution[colorIndex])
+        
+        if ordered and #ordered > 0 then
+            puzzle.paths[colorIndex] = {}
+            for i = 1, #ordered do puzzle.gridConnections[ordered[i].row.."-"..ordered[i].col] = nil end
+
+            for i = 1, #ordered do
+                if not getgenv().FlowAutoSolve then getgenv().FlowIsDrawing = false return end 
+                local node = ordered[i]
+                table.insert(puzzle.paths[colorIndex], {row = node.row, col = node.col})
+                puzzle.gridConnections[node.row.."-"..node.col] = getConnections(ordered[i-1], node, ordered[i+1])
+
+                if updateGui and getgenv().isFlowGuiVisible() then safeCall(updateGui, puzzle) end
+                if getgenv().isFlowGuiVisible() then task.wait(getgenv().FlowSolveDelay) end
+            end
+        end
+        if checkWin and getgenv().isFlowGuiVisible() then safeCall(checkWin, puzzle) end
+    end
+    getgenv().FlowIsDrawing = false
+end
+
+getgenv().triggerFlowSolvers = function()
+    for puzzle, _ in pairs(getgenv().FlowActivePuzzles) do
+        task.spawn(function() getgenv().SolveFlowPuzzle(puzzle) end)
+    end
+end
+
+local function ProcessAutoFlowLoop()
+    if not getgenv().FlowAutoSolve then return end
+
+    local currentGuiState = (getgenv().isFlowGuiVisible() ~= nil)
+    
+    if currentGuiState and not lastGuiState then
+        task.wait(0.3) 
+        getgenv().triggerFlowSolvers()
+    end
+    
+    lastGuiState = currentGuiState
+    
+    if currentGuiState and not getgenv().FlowIsDrawing then
+        for puzzle, _ in pairs(getgenv().FlowActivePuzzles) do
+            if puzzle.Solution and puzzle.paths then
+                for colorIndex = 1, #puzzle.Solution do
+                    local currentPath = puzzle.paths[colorIndex]
+                    if not currentPath or #currentPath == 0 then
+                        getgenv().SolveFlowPuzzle(puzzle, colorIndex)
+                        break
+                    end
+                end
+            end
+        end
+    end
+end
+
+local function ProcessHookResult(result)
+    if IsPuzzle(result) then
+        getgenv().FlowActivePuzzles[result] = true
+        getgenv().SolveFlowPuzzle(result)
+        return
+    end
+    if typeof(result) == "table" then
+        for _, v in pairs(result) do
+            if IsPuzzle(v) then 
+                getgenv().FlowActivePuzzles[v] = true
+                getgenv().SolveFlowPuzzle(v) 
+            end
+        end
+    end
+end
+
+local function HookModule(moduleScript)
+    if HookedModules[moduleScript] then return end
+    HookedModules[moduleScript] = true
+
+    local success, module = pcall(require, moduleScript)
+    if not success or typeof(module) ~= "table" or typeof(module.new) ~= "function" then return end
+
+    debugPrint("Đã kết nối thành công hệ thống:", moduleScript:GetFullName())
+
+    local oldNew = module.new
+    module.new = function(...)
+        local result = oldNew(...)
+        task.spawn(function()
+            task.wait(0.05)
+            safeCall(ProcessHookResult, result)
+        end)
+        return result
+    end
+end
+
+local function ScanModules()
+    local safeContainers = {ReplicatedStorage, PlayerGui, game:GetService("StarterGui")}
+    for c = 1, #safeContainers do
+        task.spawn(function()
+            local descendants = safeContainers[c]:GetDescendants()
+            for i = 1, #descendants do
+                local obj = descendants[i]
+                if obj:IsA("ModuleScript") then
+                    local lower = string.lower(obj.Name)
+                    if lower:find("flow") or lower:find("puzzle") or lower:find("pipe") or lower:find("connect") or lower:find("grid") then
+                        HookModule(obj)
+                    end
+                end
+                if i % 150 == 0 then task.wait() end
+            end
+        end)
+    end
+end
+
+ScanModules()
+
+ReplicatedStorage.DescendantAdded:Connect(function(obj)
+    if obj:IsA("ModuleScript") then
+        local lower = string.lower(obj.Name)
+        if lower:find("flow") or lower:find("puzzle") or lower:find("pipe") or lower:find("connect") or lower:find("grid") then
+            task.wait(0.05)
+            HookModule(obj)
+        end
+    end
+end)
+
+task.spawn(function()
+    while task.wait(0.15) do
+        ProcessAutoFlowLoop()
+    end
+end)
