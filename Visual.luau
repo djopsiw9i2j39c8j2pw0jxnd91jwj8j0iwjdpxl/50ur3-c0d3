@@ -53,7 +53,7 @@ getgenv().HutaoESPSystem = {
     Cache = { CachedRoot = nil, CleanupTick = 0 },
     
     Config = {
-        FONT_SIZE = 12, HEARTBEAT_RATE = 0.1, DISTANCE_RATE = 0.1,
+        FONT_SIZE = 12, HEARTBEAT_RATE = 0.15, DISTANCE_RATE = 0.15,
         GENERATOR_DUPLICATE_RADIUS = 10,
         CLONE_IGNORE_POSITION = Vector3.new(-3552.90, 11.88, 267.95), CLONE_IGNORE_RADIUS = 500
     },
