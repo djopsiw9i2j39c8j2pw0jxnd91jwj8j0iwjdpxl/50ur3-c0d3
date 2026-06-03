@@ -437,3 +437,360 @@ function Sys.Validators.Trap(obj) return obj and obj:IsA("Model") and obj.Name:f
 function Sys.Validators.Subspace(obj) return obj and obj:IsA("Model") and obj.Name == "SubspaceTripmine" and not Sys.Utils.isLocalCharacter(obj) and Sys.Utils.getRoot(obj) end
 function Sys.Validators.JohnDoeTrap(obj) local n = obj.Name:lower() return obj and (n == "shadow" or n:find("shadow")) and not Sys.Utils.isLocalCharacter(obj) and Sys.Utils.getRoot(obj) end
 function Sys.Validators.FakeGenerator(obj) if not obj or not obj:IsA("Model") or obj.Name ~= "FakeGenerator" then return false end local m = Sys.Internal.GetDynamicMapFolder() return m and obj:IsDescendantOf(m) and Sys.Utils.getRoot(obj) ~= nil end
+
+
+-- ====================================================
+-- [QUẢN LÝ TRẠNG THÁI HỆ THỐNG - WEAK TABLE]
+-- ====================================================
+getgenv().FlowAutoSolve = getgenv().FlowAutoSolve or false
+getgenv().FlowSolveDelay = getgenv().FlowSolveDelay or 0.08
+getgenv().FlowDebug = getgenv().FlowDebug or false
+
+if not getgenv().FlowKnownPuzzles then
+    getgenv().FlowKnownPuzzles = {}
+    setmetatable(getgenv().FlowKnownPuzzles, { __mode = "k" })
+end
+
+local FlowPathCache = {}
+local FlowUsedCache = {}
+local lastGuiState = false
+local HookedModules = {}
+local PlayerGui = localPlayer:WaitForChild("PlayerGui")
+
+-- ====================================================
+-- [HÀM TIỆN ÍCH LÕI]
+-- ====================================================
+local function debugPrint(...)
+    if getgenv().FlowDebug then print("[FLOW DEBUG]:", ...) end
+end
+
+local function safeCall(fn, ...)
+    local ok, res = pcall(fn, ...)
+    if ok then return res end
+    debugPrint("Lỗi thực thi hàm:", res)
+end
+
+getgenv().isFlowGuiVisible = function()
+    local puzzleUI = PlayerGui:FindFirstChild("PuzzleUI")
+    if not (puzzleUI and puzzleUI.Enabled) then return nil end
+    
+    local container = puzzleUI:FindFirstChild("Container")
+    local gridHolder = container and container:FindFirstChild("GridHolder")
+    local grid = gridHolder and gridHolder:FindFirstChild("Grid")
+    
+    if grid and grid.Visible then 
+        return grid 
+    end
+    return nil
+end
+
+local function IsPuzzle(tbl)
+    if typeof(tbl) ~= "table" then return false end
+    if rawget(tbl, "Solution") then return true end
+    if rawget(tbl, "paths") and rawget(tbl, "updateGui") then return true end
+    return false
+end
+
+local function getDirection(r1, c1, r2, c2)
+    if r2 < r1 then return "up" end
+    if r2 > r1 then return "down" end
+    if c2 < c1 then return "left" end
+    if c2 > c1 then return "right" end
+end
+
+local function getConnections(prev, curr, nextNode)
+    local connections = {}
+    if prev and curr then
+        local dir = getDirection(curr.row, curr.col, prev.row, prev.col)
+        if dir == "up" then dir = "down"
+        elseif dir == "down" then dir = "up"
+        elseif dir == "left" then dir = "right"
+        elseif dir == "right" then dir = "left" end
+        if dir then connections[dir] = true end
+    end
+    if nextNode and curr then
+        local dir = getDirection(curr.row, curr.col, nextNode.row, nextNode.col)
+        if dir then connections[dir] = true end
+    end
+    return connections
+end
+
+local function isNeighbour(a, b)
+    return math.abs(a.row - b.row) + math.abs(a.col - b.col) == 1
+end
+
+local function findMethod(obj, names)
+    for i = 1, #names do
+        if typeof(obj[names[i]]) == "function" then return obj[names[i]] end
+    end
+end
+
+-- ====================================================
+-- [THUẬT TOÁN HƯỚNG DẪN VIÊN - SẮP XẾP ĐƯỜNG ĐI]
+-- ====================================================
+local function findStartNode()
+    for i = 1, #FlowPathCache do
+        local neighbors = 0
+        for j = 1, #FlowPathCache do
+            if i ~= j and isNeighbour(FlowPathCache[i], FlowPathCache[j]) then
+                neighbors = neighbors + 1
+            end
+        end
+        if neighbors == 1 then return i end
+    end
+    return 1
+end
+
+local function sortPathByRealEnds(unorderedPath)
+    if not unorderedPath or #unorderedPath <= 1 then return unorderedPath end
+    table.clear(FlowPathCache)
+    table.clear(FlowUsedCache)
+    
+    for i = 1, #unorderedPath do
+        FlowPathCache[i] = {row = unorderedPath[i].row, col = unorderedPath[i].col}
+    end
+
+    local startNodeIndex = findStartNode()
+    local ordered = { FlowPathCache[startNodeIndex] }
+    FlowUsedCache[startNodeIndex] = true
+
+    for _ = 2, #FlowPathCache do
+        local last = ordered[#ordered]
+        local foundNext = false
+        for i = 1, #FlowPathCache do
+            if not FlowUsedCache[i] and isNeighbour(last, FlowPathCache[i]) then
+                table.insert(ordered, FlowPathCache[i])
+                FlowUsedCache[i] = true
+                foundNext = true
+                break
+            end
+        end
+        if not foundNext then
+            for i = 1, #FlowPathCache do
+                if not FlowUsedCache[i] then
+                    table.insert(ordered, FlowPathCache[i])
+                    FlowUsedCache[i] = true
+                    break
+                end
+            end
+        end
+    end
+    return ordered
+end
+
+-- ====================================================
+-- [KIỂM TRA HOÀN THÀNH BẢNG ĐỐ]
+-- ====================================================
+local function isPuzzleComplete(puzzle)
+    if not puzzle.Solution or not puzzle.paths then return false end
+    for colorIndex, solutionPath in pairs(puzzle.Solution) do
+        local currentPath = puzzle.paths[colorIndex]
+        if not currentPath or #currentPath ~= #solutionPath then
+            return false
+        end
+    end
+    return true
+end
+
+-- ====================================================
+-- [MÔ PHỎNG VẼ DẦN DẦN (GUIDE MODE)]
+-- ====================================================
+local function drawSingleColor(puzzle, colorIndex, solutionPath, updateGui)
+    -- Bước 1: Tìm full đường đi một lần duy nhất
+    local ordered = sortPathByRealEnds(solutionPath)
+    if not ordered or #ordered == 0 then return true end
+
+    -- Bước 2: Xóa sạch dây cũ của màu này để "Hướng dẫn viên" bắt đầu vẽ lại từ đầu
+    puzzle.paths[colorIndex] = {}
+    for i = 1, #ordered do 
+        puzzle.gridConnections[ordered[i].row.."-"..ordered[i].col] = nil 
+    end
+    if updateGui then safeCall(updateGui, puzzle) end
+
+    -- Bước 3: Script nhìn theo mảng "ordered" và nối dần dần từng ô
+    for i = 1, #ordered do
+        if not getgenv().FlowAutoSolve or not getgenv().isFlowGuiVisible() then return false end 
+        
+        local node = ordered[i]
+        table.insert(puzzle.paths[colorIndex], {row = node.row, col = node.col})
+        puzzle.gridConnections[node.row.."-"..node.col] = getConnections(ordered[i-1], node, ordered[i+1])
+
+        -- Ép UI hiện sợi dây ngay lập tức ở ô vừa đi qua
+        if updateGui then safeCall(updateGui, puzzle) end
+        
+        -- Nhịp nghỉ của hướng dẫn viên để tạo hiệu ứng mượt
+        task.wait(getgenv().FlowSolveDelay)
+    end
+    return true
+end
+
+getgenv().SolveFlowPuzzle = function(puzzle)
+    if not getgenv().FlowAutoSolve or not IsPuzzle(puzzle) or not puzzle.Solution then return end
+    
+    -- Ổ KHÓA CHỐNG ĐÈ LUỒNG: Bảng nào đang vẽ thì khóa chặt lại
+    if puzzle.GuideActive then return end 
+    puzzle.GuideActive = true 
+
+    puzzle.paths = puzzle.paths or {}
+    puzzle.gridConnections = puzzle.gridConnections or {}
+
+    local updateGui = findMethod(puzzle, {"updateGui", "UpdateGui", "Render", "render"})
+    local checkWin = findMethod(puzzle, {"checkForWin", "CheckForWin", "WinCheck"})
+    
+    if not getgenv().isFlowGuiVisible() then 
+        puzzle.GuideActive = false 
+        return 
+    end
+
+    for colorIndex = 1, #puzzle.Solution do
+        local currentPath = puzzle.paths[colorIndex]
+        -- Hướng dẫn viên chỉ vẽ sợi dây nào chưa hoàn chỉnh
+        if not currentPath or #currentPath ~= #puzzle.Solution[colorIndex] then
+            local success = drawSingleColor(puzzle, colorIndex, puzzle.Solution[colorIndex], updateGui)
+            if not success then break end
+        end
+    end
+
+    if checkWin and getgenv().isFlowGuiVisible() then safeCall(checkWin, puzzle) end
+    
+    -- Mở khóa sau khi hoàn tất toàn bộ bảng
+    puzzle.GuideActive = false
+end
+
+getgenv().triggerFlowSolvers = function()
+    for puzzle, _ in pairs(getgenv().FlowKnownPuzzles) do
+        task.spawn(function() getgenv().SolveFlowPuzzle(puzzle) end)
+    end
+end
+
+-- ====================================================
+-- [VÒNG LẶP KIỂM TRA SIÊU NHẸ]
+-- ====================================================
+local function ProcessAutoFlowLoop()
+    if not getgenv().FlowAutoSolve then return end
+
+    local currentGuiState = (getgenv().isFlowGuiVisible() ~= nil)
+    
+    if currentGuiState and not lastGuiState then
+        task.wait(0.3) 
+        getgenv().triggerFlowSolvers()
+    end
+    
+    lastGuiState = currentGuiState
+    
+    if currentGuiState then
+        for puzzle, _ in pairs(getgenv().FlowKnownPuzzles) do
+            -- Chỉ ra lệnh giải khi bảng bị đứt dây VÀ Hướng dẫn viên không làm việc
+            if puzzle.Solution and not puzzle.GuideActive and not isPuzzleComplete(puzzle) then
+                task.spawn(function() getgenv().SolveFlowPuzzle(puzzle) end)
+                break
+            end
+        end
+    end
+end
+
+-- ====================================================
+-- [HỆ THỐNG HOOK MODULE SCRIPT]
+-- ====================================================
+local function ProcessHookResult(result)
+    if IsPuzzle(result) then
+        getgenv().FlowKnownPuzzles[result] = true
+        getgenv().SolveFlowPuzzle(result)
+        return
+    end
+    if typeof(result) == "table" then
+        for _, v in pairs(result) do
+            if IsPuzzle(v) then 
+                getgenv().FlowKnownPuzzles[v] = true
+                getgenv().SolveFlowPuzzle(v) 
+            end
+        end
+    end
+end
+
+local function HookModule(moduleScript)
+    if HookedModules[moduleScript] then return end
+    HookedModules[moduleScript] = true
+
+    local success, module = pcall(require, moduleScript)
+    if not success or typeof(module) ~= "table" or typeof(module.new) ~= "function" then return end
+
+    debugPrint("Đã kết nối thành công hệ thống:", moduleScript:GetFullName())
+
+    local oldNew = module.new
+    module.new = function(...)
+        local result = oldNew(...)
+        task.spawn(function()
+            task.wait(0.05)
+            safeCall(ProcessHookResult, result)
+        end)
+        return result
+    end
+end
+
+local function ScanModules()
+    local safeContainers = {ReplicatedStorage, game:GetService("StarterGui")}
+    for c = 1, #safeContainers do
+        task.spawn(function()
+            local descendants = safeContainers[c]:GetDescendants()
+            for i = 1, #descendants do
+                local obj = descendants[i]
+                if obj:IsA("ModuleScript") then
+                    local lower = string.lower(obj.Name)
+                    if lower:find("flow") or lower:find("puzzle") or lower:find("pipe") or lower:find("connect") or lower:find("grid") then
+                        HookModule(obj)
+                    end
+                end
+                if i % 40 == 0 then game:GetService("RunService").Heartbeat:Wait() end
+            end
+        end)
+    end
+end
+
+ScanModules()
+
+ReplicatedStorage.DescendantAdded:Connect(function(obj)
+    if obj:IsA("ModuleScript") then
+        local lower = string.lower(obj.Name)
+        if lower:find("flow") or lower:find("puzzle") or lower:find("pipe") or lower:find("connect") or lower:find("grid") then
+            task.wait(0.05)
+            HookModule(obj)
+        end
+    end
+end)
+
+task.spawn(function()
+    while true do
+        game:GetService("RunService").Heartbeat:Wait()
+        local LastTick = getgenv().FlowLoopTick or 0
+        if tick() - LastTick >= 0.15 then
+            getgenv().FlowLoopTick = tick()
+            ProcessAutoFlowLoop()
+        end
+    end
+end)
+
+-- ====================================================
+-- [TÁCH BIỆT UI CALLBACKS]
+-- ====================================================
+local function onToggleFarmState(state)
+    getgenv().FlowAutoSolve = state
+    if state then
+        task.spawn(getgenv().triggerFlowSolvers)
+        if typeof(AddLoop) == "function" then
+            pcall(AddLoop, "AutoGenerator", AutoGenLoop, 0.1, 5)
+        end
+    else
+        if typeof(RemoveLoop) == "function" then
+            pcall(RemoveLoop, "AutoGenerator")
+        end
+        getgenv().solveGeneratorCooldown = false
+    end
+end
+
+local function onDelayInputChange(value)
+    local num = tonumber(value)
+    if num then
+        getgenv().FlowSolveDelay = math.clamp(num, 0.01, 10)
+    end
+end
