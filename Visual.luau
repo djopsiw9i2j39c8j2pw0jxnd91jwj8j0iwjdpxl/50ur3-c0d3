@@ -438,7 +438,6 @@ function Sys.Validators.Subspace(obj) return obj and obj:IsA("Model") and obj.Na
 function Sys.Validators.JohnDoeTrap(obj) local n = obj.Name:lower() return obj and (n == "shadow" or n:find("shadow")) and not Sys.Utils.isLocalCharacter(obj) and Sys.Utils.getRoot(obj) end
 function Sys.Validators.FakeGenerator(obj) if not obj or not obj:IsA("Model") or obj.Name ~= "FakeGenerator" then return false end local m = Sys.Internal.GetDynamicMapFolder() return m and obj:IsDescendantOf(m) and Sys.Utils.getRoot(obj) ~= nil end
 
-
 -- ====================================================
 -- [QUẢN LÝ TRẠNG THÁI HỆ THỐNG - WEAK TABLE]
 -- ====================================================
@@ -596,18 +595,15 @@ end
 -- [MÔ PHỎNG VẼ DẦN DẦN (GUIDE MODE)]
 -- ====================================================
 local function drawSingleColor(puzzle, colorIndex, solutionPath, updateGui)
-    -- Bước 1: Tìm full đường đi một lần duy nhất
     local ordered = sortPathByRealEnds(solutionPath)
     if not ordered or #ordered == 0 then return true end
 
-    -- Bước 2: Xóa sạch dây cũ của màu này để "Hướng dẫn viên" bắt đầu vẽ lại từ đầu
     puzzle.paths[colorIndex] = {}
     for i = 1, #ordered do 
         puzzle.gridConnections[ordered[i].row.."-"..ordered[i].col] = nil 
     end
     if updateGui then safeCall(updateGui, puzzle) end
 
-    -- Bước 3: Script nhìn theo mảng "ordered" và nối dần dần từng ô
     for i = 1, #ordered do
         if not getgenv().FlowAutoSolve or not getgenv().isFlowGuiVisible() then return false end 
         
@@ -615,10 +611,7 @@ local function drawSingleColor(puzzle, colorIndex, solutionPath, updateGui)
         table.insert(puzzle.paths[colorIndex], {row = node.row, col = node.col})
         puzzle.gridConnections[node.row.."-"..node.col] = getConnections(ordered[i-1], node, ordered[i+1])
 
-        -- Ép UI hiện sợi dây ngay lập tức ở ô vừa đi qua
         if updateGui then safeCall(updateGui, puzzle) end
-        
-        -- Nhịp nghỉ của hướng dẫn viên để tạo hiệu ứng mượt
         task.wait(getgenv().FlowSolveDelay)
     end
     return true
@@ -627,7 +620,6 @@ end
 getgenv().SolveFlowPuzzle = function(puzzle)
     if not getgenv().FlowAutoSolve or not IsPuzzle(puzzle) or not puzzle.Solution then return end
     
-    -- Ổ KHÓA CHỐNG ĐÈ LUỒNG: Bảng nào đang vẽ thì khóa chặt lại
     if puzzle.GuideActive then return end 
     puzzle.GuideActive = true 
 
@@ -644,7 +636,6 @@ getgenv().SolveFlowPuzzle = function(puzzle)
 
     for colorIndex = 1, #puzzle.Solution do
         local currentPath = puzzle.paths[colorIndex]
-        -- Hướng dẫn viên chỉ vẽ sợi dây nào chưa hoàn chỉnh
         if not currentPath or #currentPath ~= #puzzle.Solution[colorIndex] then
             local success = drawSingleColor(puzzle, colorIndex, puzzle.Solution[colorIndex], updateGui)
             if not success then break end
@@ -652,8 +643,6 @@ getgenv().SolveFlowPuzzle = function(puzzle)
     end
 
     if checkWin and getgenv().isFlowGuiVisible() then safeCall(checkWin, puzzle) end
-    
-    -- Mở khóa sau khi hoàn tất toàn bộ bảng
     puzzle.GuideActive = false
 end
 
@@ -680,7 +669,6 @@ local function ProcessAutoFlowLoop()
     
     if currentGuiState then
         for puzzle, _ in pairs(getgenv().FlowKnownPuzzles) do
-            -- Chỉ ra lệnh giải khi bảng bị đứt dây VÀ Hướng dẫn viên không làm việc
             if puzzle.Solution and not puzzle.GuideActive and not isPuzzleComplete(puzzle) then
                 task.spawn(function() getgenv().SolveFlowPuzzle(puzzle) end)
                 break
@@ -729,6 +717,7 @@ local function HookModule(moduleScript)
 end
 
 local function ScanModules()
+    -- Đã tái sử dụng ReplicatedStorage từ main file
     local safeContainers = {ReplicatedStorage, game:GetService("StarterGui")}
     for c = 1, #safeContainers do
         task.spawn(function()
@@ -741,7 +730,7 @@ local function ScanModules()
                         HookModule(obj)
                     end
                 end
-                if i % 40 == 0 then game:GetService("RunService").Heartbeat:Wait() end
+                if i % 40 == 0 then RunService.Heartbeat:Wait() end
             end
         end)
     end
@@ -761,7 +750,7 @@ end)
 
 task.spawn(function()
     while true do
-        game:GetService("RunService").Heartbeat:Wait()
+        RunService.Heartbeat:Wait()
         local LastTick = getgenv().FlowLoopTick or 0
         if tick() - LastTick >= 0.15 then
             getgenv().FlowLoopTick = tick()
@@ -769,28 +758,3 @@ task.spawn(function()
         end
     end
 end)
-
--- ====================================================
--- [TÁCH BIỆT UI CALLBACKS]
--- ====================================================
-local function onToggleFarmState(state)
-    getgenv().FlowAutoSolve = state
-    if state then
-        task.spawn(getgenv().triggerFlowSolvers)
-        if typeof(AddLoop) == "function" then
-            pcall(AddLoop, "AutoGenerator", AutoGenLoop, 0.1, 5)
-        end
-    else
-        if typeof(RemoveLoop) == "function" then
-            pcall(RemoveLoop, "AutoGenerator")
-        end
-        getgenv().solveGeneratorCooldown = false
-    end
-end
-
-local function onDelayInputChange(value)
-    local num = tonumber(value)
-    if num then
-        getgenv().FlowSolveDelay = math.clamp(num, 0.01, 10)
-    end
-end
