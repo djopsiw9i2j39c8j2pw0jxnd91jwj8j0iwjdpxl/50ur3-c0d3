@@ -758,3 +758,444 @@ task.spawn(function()
         end
     end
 end)
+
+-- auto block
+
+-- ==================== KHỞI TẠO CẤU HÌNH QUA getgenv() ====================
+-- Cho phép tách UI (nút) và logic (script này) thành 2 phần độc lập
+-- Nếu biến chưa có trong getgenv(), gán giá trị mặc định
+
+local defaults = {
+    -- Sound list
+    soundIds = {
+        ["102228729296384"] = true, ["140242176732868"] = true, ["112809109188560"] = true, ["136323728355613"] = true,
+        ["115026634746636"] = true, ["84116622032112"] = true, ["108907358619313"] = true, ["127793641088496"] = true,
+        ["86174610237192"] = true, ["95079963655241"] = true, ["101199185291628"] = true, ["119942598489800"] = true,
+        ["84307400688050"] = true, ["113037804008732"] = true, ["105200830849301"] = true, ["75330693422988"] = true,
+        ["82221759983649"] = true, ["109348678063422"] = true, ["81702359653578"] = true, ["85853080745515"] = true,
+        ["108610718831698"] = true, ["112395455254818"] = true, ["109431876587852"] = true, ["12222216"] = true,
+        ["79980897195554"] = true, ["119583605486352"] = true, ["71834552297085"] = true, ["116581754553533"] = true,
+        ["86833981571073"] = true, ["110372418055226"] = true, ["105840448036441"] = true, ["86494585504534"] = true,
+        ["80516583309685"] = true, ["131406927389838"] = true, ["89004992452376"] = true, ["117231507259853"] = true,
+        ["101698569375359"] = true, ["101553872555606"] = true, ["140412278320643"] = true, ["106300477136129"] = true,
+        ["117173212095661"] = true, ["104910828105172"] = true, ["140194172008986"] = true, ["85544168523099"] = true
+    },
+
+    -- Chế độ & tính năng
+    BlockMode = "Default",  -- "Default" hoặc "Pro"
+    AutoBlock = false,
+    ShowCircle = false,
+    UseHitCircle = false,
+    WallCheck = false,
+    StubCheckEnabled = false,
+
+    -- Thông số
+    RangeCheck = 25,
+    StubCheck = 6,
+    HitRange = 10,
+    ProBlockCooldown = 0.3,
+    ProSoundThreshold = 0.9  -- bỏ qua sound đã chạy quá 90%
+}
+
+-- Đồng bộ với getgenv(), chỉ gán nếu chưa tồn tại
+for k, v in pairs(defaults) do
+    if getgenv()[k] == nil then
+        getgenv()[k] = v
+    end
+end
+
+local function GetRootPart()
+    return playerCharacter and playerCharacter:FindFirstChild("HumanoidRootPart")
+end
+
+local function isKiller(player)
+    if not killersFolder or not player then return false end
+    if killersFolder:FindFirstChild(player.Name) then return true end
+    local char = player.Character
+    if char and killersFolder:FindFirstChild(char.Name) then return true end
+    return false
+end
+
+local function FireButton(btn)
+    if not btn or not btn.Visible then return end
+    pcall(function() btn:Activate() end)
+    pcall(function()
+        local conns = getconnections(btn.MouseButton1Click)
+        for _, conn in ipairs(conns) do
+            pcall(function() conn:Fire() end)
+        end
+    end)
+    pcall(function()
+        local conns = getconnections(btn.Activated)
+        for _, conn in ipairs(conns) do
+            pcall(function() conn:Fire() end)
+        end
+    end)
+end
+
+local function fastBlock()
+    local mainUI = PlayerGui:FindFirstChild("MainUI")
+    local container = mainUI and mainUI:FindFirstChild("AbilityContainer")
+    if not container then return end
+    local btn = container:FindFirstChild("Block")
+    if btn and (btn:IsA("TextButton") or btn:IsA("ImageButton")) then
+        FireButton(btn)
+    end
+end
+
+local function CreateCircle(partRef, size)
+    if partRef and partRef.Parent then return partRef end
+    local p = Instance.new("Part")
+    p.Anchored = true
+    p.CanCollide = false
+    p.Transparency = 0.2
+    p.Material = Enum.Material.Neon
+    p.Shape = Enum.PartType.Cylinder
+    p.Size = Vector3.new(0.2, size, size)
+    p.Color = Color3.fromRGB(255, 0, 0)
+    p.Parent = Workspace
+    return p
+end
+
+local function GetMainKiller()
+    if not killersFolder then return nil end
+    for _, k in ipairs(killersFolder:GetChildren()) do
+        local hrp = k:FindFirstChild("HumanoidRootPart")
+        if hrp then
+            return k, hrp.CFrame
+        end
+    end
+end
+
+local function isCharacterModel(model)
+    return model and model:IsA("Model") and model:FindFirstChildOfClass("Humanoid") ~= nil
+end
+
+local function CheckWall(fromPos, toPos)
+    if not getgenv().WallCheck then return false end
+    local rayParams = RaycastParams.new()
+    rayParams.FilterType = Enum.RaycastFilterType.Blacklist
+    local blacklist = {playerCharacter}
+    local playersFolder = Workspace:FindFirstChild("Players")
+    if playersFolder then table.insert(blacklist, playersFolder) end
+    for _, obj in ipairs(Workspace:GetChildren()) do
+        if isCharacterModel(obj) then table.insert(blacklist, obj) end
+    end
+    rayParams.FilterDescendantsInstances = blacklist
+    local dir = (toPos - fromPos)
+    local result = Workspace:Raycast(fromPos, dir, rayParams)
+    return result ~= nil
+end
+
+local CirclePart, HitCirclePart
+
+local function UpdateCircle()
+    local hrp = GetRootPart()
+    if not hrp then return end
+    local killer, kcf = GetMainKiller()
+    if not killer or not kcf then return end
+    local baseOffset = Vector3.new(0, -3, 0)
+
+    if getgenv().ShowCircle then
+        CirclePart = CreateCircle(CirclePart, getgenv().RangeCheck * 2)
+        CirclePart.CFrame = (kcf + baseOffset) * CFrame.Angles(0, 0, math.rad(90))
+        CirclePart.Size = Vector3.new(0.2, getgenv().RangeCheck * 2, getgenv().RangeCheck * 2)
+        if getgenv().UseHitCircle then
+            CirclePart.Color = Color3.fromRGB(255, 0, 0)
+        else
+            local inside = (hrp.Position - kcf.Position).Magnitude <= getgenv().RangeCheck
+            CirclePart.Color = inside and Color3.fromRGB(0, 255, 0) or Color3.fromRGB(255, 0, 0)
+        end
+    elseif CirclePart then
+        CirclePart:Destroy()
+        CirclePart = nil
+    end
+
+    if getgenv().UseHitCircle then
+        HitCirclePart = CreateCircle(HitCirclePart, getgenv().HitRange * 2)
+        local forward = kcf.LookVector
+        local pos = kcf.Position + forward * (getgenv().HitRange * 0.8) + baseOffset
+        HitCirclePart.CFrame = CFrame.new(pos) * CFrame.Angles(0, 0, math.rad(90))
+        HitCirclePart.Size = Vector3.new(0.2, getgenv().HitRange * 2, getgenv().HitRange * 2)
+        local inside = (hrp.Position - pos).Magnitude <= getgenv().HitRange
+        HitCirclePart.Color = inside and Color3.fromRGB(0, 255, 0) or Color3.fromRGB(255, 0, 0)
+    elseif HitCirclePart then
+        HitCirclePart:Destroy()
+        HitCirclePart = nil
+    end
+end
+
+local lastTeleport = 0
+local function teleportDodge(killerChar)
+    local now = tick()
+    if now - lastTeleport < 5 then return end
+    lastTeleport = now
+    local myRoot = GetRootPart()
+    local killerRoot = killerChar and killerChar:FindFirstChild("HumanoidRootPart")
+    if not (myRoot and killerRoot) then return end
+    local old = myRoot.CFrame
+    myRoot.CFrame = killerRoot.CFrame + killerRoot.CFrame.LookVector * 7.5
+    task.delay(0.1, function()
+        if myRoot then myRoot.CFrame = old end
+    end)
+end
+
+-- ==================== XỬ LÝ SOUND ====================
+local function getSoundId(sound)
+    if not sound or not sound.SoundId then return nil end
+    return tostring(sound.SoundId):match("%d+")
+end
+
+local activeAttackers = {}
+local function removeActiveSound(player, sound)
+    if not activeAttackers[player] then return end
+    local data = activeAttackers[player]
+    data.sounds[sound] = nil
+    if data.endedConns[sound] then
+        data.endedConns[sound]:Disconnect()
+        data.endedConns[sound] = nil
+    end
+    if next(data.sounds) == nil then
+        for _, conn in pairs(data.endedConns) do
+            conn:Disconnect()
+        end
+        activeAttackers[player] = nil
+    end
+end
+
+local function onSoundStarted(player, sound, char, soundId)
+    if not getgenv().AutoBlock then return end
+    if not soundId or not getgenv().soundIds[soundId] then return end
+    if not isKiller(player) then return end
+
+    if getgenv().BlockMode == "Default" then
+        local myRoot = GetRootPart()
+        local root = char:FindFirstChild("HumanoidRootPart")
+        if not myRoot or not root then return end
+
+        if getgenv().StubCheckEnabled and math.abs(root.Position.Y - myRoot.Position.Y) > getgenv().StubCheck then return end
+
+        local inRange = false
+        if getgenv().UseHitCircle then
+            local killer, kcf = GetMainKiller()
+            if not killer or not kcf then return end
+            local baseOffset = Vector3.new(0, -3, 0)
+            local forward = kcf.LookVector
+            local pos = kcf.Position + forward * (getgenv().HitRange * 0.8) + baseOffset
+            inRange = (myRoot.Position - pos).Magnitude <= getgenv().HitRange
+        else
+            inRange = (myRoot.Position - root.Position).Magnitude <= getgenv().RangeCheck
+        end
+
+        if not inRange then return end
+        if CheckWall(myRoot.Position, root.Position) then return end
+
+        fastBlock()
+        if isKiller(player) then teleportDodge(char) end
+    else
+        -- Pro mode: lưu trạng thái đang tấn công
+        if not activeAttackers[player] then
+            local root = char:FindFirstChild("HumanoidRootPart")
+            if not root then return end
+            activeAttackers[player] = {
+                root = root,
+                sounds = {},
+                endedConns = {}
+            }
+        else
+            local root = char:FindFirstChild("HumanoidRootPart")
+            if root then activeAttackers[player].root = root end
+        end
+
+        activeAttackers[player].sounds[sound] = true
+
+        local conn = sound.Ended:Connect(function()
+            removeActiveSound(player, sound)
+        end)
+        activeAttackers[player].endedConns[sound] = conn
+
+        local destroyConn
+        destroyConn = sound.Destroying:Connect(function()
+            removeActiveSound(player, sound)
+            destroyConn:Disconnect()
+        end)
+    end
+end
+
+-- ==================== KIỂM TRA PRO MODE ====================
+local lastProBlockTime = 0
+local proHeartbeatConn = nil
+
+local function checkProBlock()
+    if not getgenv().AutoBlock then return end
+    if getgenv().BlockMode ~= "Pro" then return end
+
+    local now = tick()
+    if now - lastProBlockTime < getgenv().ProBlockCooldown then return end
+
+    local myRoot = GetRootPart()
+    if not myRoot then return end
+
+    for player, data in pairs(activeAttackers) do
+        local root = data.root
+        if not root or not root.Parent then
+            for _, conn in pairs(data.endedConns) do conn:Disconnect() end
+            activeAttackers[player] = nil
+            continue
+        end
+
+        local anyValidSound = false
+        for sound, _ in pairs(data.sounds) do
+            if sound and sound.Parent then
+                local isPlaying = pcall(function() return sound.IsPlaying end)
+                if isPlaying then
+                    if sound.TimeLength > 0 then
+                        local progress = sound.TimePosition / sound.TimeLength
+                        if progress < getgenv().ProSoundThreshold then
+                            anyValidSound = true
+                            break
+                        end
+                    else
+                        anyValidSound = true
+                        break
+                    end
+                end
+            end
+        end
+
+        if not anyValidSound then
+            for _, conn in pairs(data.endedConns) do conn:Disconnect() end
+            activeAttackers[player] = nil
+            continue
+        end
+
+        if getgenv().StubCheckEnabled and math.abs(root.Position.Y - myRoot.Position.Y) > getgenv().StubCheck then continue end
+
+        local inRange = false
+        if getgenv().UseHitCircle then
+            local killer, kcf = GetMainKiller()
+            if not killer or not kcf then continue end
+            local baseOffset = Vector3.new(0, -3, 0)
+            local forward = kcf.LookVector
+            local pos = kcf.Position + forward * (getgenv().HitRange * 0.8) + baseOffset
+            inRange = (myRoot.Position - pos).Magnitude <= getgenv().HitRange
+        else
+            inRange = (myRoot.Position - root.Position).Magnitude <= getgenv().RangeCheck
+        end
+
+        if not inRange then continue end
+        if CheckWall(myRoot.Position, root.Position) then continue end
+
+        lastProBlockTime = now
+        fastBlock()
+        if isKiller(player) and player.Character then
+            teleportDodge(player.Character)
+        end
+        break
+    end
+end
+
+local function startProLoop()
+    if proHeartbeatConn then return end
+    proHeartbeatConn = RunService.Heartbeat:Connect(checkProBlock)
+end
+
+local function stopProLoop()
+    if proHeartbeatConn then
+        proHeartbeatConn:Disconnect()
+        proHeartbeatConn = nil
+    end
+end
+
+-- ==================== QUẢN LÝ PLAYER ====================
+local function setupSoundListener(char, player)
+    if not isKiller(player) then return end
+
+    if activeAttackers[player] then
+        for _, conn in pairs(activeAttackers[player].endedConns) do
+            conn:Disconnect()
+        end
+        activeAttackers[player] = nil
+    end
+
+    for _, sound in ipairs(char:GetDescendants()) do
+        if sound:IsA("Sound") then
+            local soundId = getSoundId(sound)
+            if soundId and getgenv().soundIds[soundId] then
+                local playedEvent = sound:GetPropertyChangedSignal("IsPlaying")
+                if playedEvent then
+                    playedEvent:Connect(function()
+                        if sound.IsPlaying then
+                            onSoundStarted(player, sound, char, soundId)
+                        end
+                    end)
+                end
+                if sound.IsPlaying then
+                    onSoundStarted(player, sound, char, soundId)
+                end
+            end
+        end
+    end
+
+    char.DescendantAdded:Connect(function(descendant)
+        if descendant:IsA("Sound") then
+            local soundId = getSoundId(descendant)
+            if soundId and getgenv().soundIds[soundId] then
+                local playedEvent = descendant:GetPropertyChangedSignal("IsPlaying")
+                if playedEvent then
+                    playedEvent:Connect(function()
+                        if descendant.IsPlaying then
+                            onSoundStarted(player, descendant, char, soundId)
+                        end
+                    end)
+                end
+                if descendant.IsPlaying then
+                    onSoundStarted(player, descendant, char, soundId)
+                end
+            end
+        end
+    end)
+end
+
+local playerConns = {}
+
+local function monitorCharacter(player, char)
+    if not char then return end
+    if isKiller(player) then
+        setupSoundListener(char, player)
+    end
+    playerConns[player] = playerConns[player] or {}
+end
+
+local function onPlayerAdded(player)
+    if player == localPlayer then return end
+    if player.Character then
+        monitorCharacter(player, player.Character)
+    end
+    player.CharacterAdded:Connect(function(char)
+        task.wait(0)
+        monitorCharacter(player, char)
+    end)
+end
+
+for _, p in ipairs(Players:GetPlayers()) do
+    onPlayerAdded(p)
+end
+Players.PlayerAdded:Connect(onPlayerAdded)
+
+localPlayer.CharacterAdded:Connect(function(char)
+    playerCharacter = char
+end)
+
+spawn(function()
+    while true do
+        UpdateCircle()
+        if getgenv().AutoBlock and getgenv().BlockMode == "Pro" then
+            startProLoop()
+        else
+            stopProLoop()
+        end
+        task.wait(0.02)
+    end
+end)
+
