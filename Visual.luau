@@ -925,21 +925,6 @@ local function UpdateCircle()
     end
 end
 
-local lastTeleport = 0
-local function teleportDodge(killerChar)
-    local now = tick()
-    if now - lastTeleport < 5 then return end
-    lastTeleport = now
-    local myRoot = GetRootPart()
-    local killerRoot = killerChar and killerChar:FindFirstChild("HumanoidRootPart")
-    if not (myRoot and killerRoot) then return end
-    local old = myRoot.CFrame
-    myRoot.CFrame = killerRoot.CFrame + killerRoot.CFrame.LookVector * 7.5
-    task.delay(0.1, function()
-        if myRoot then myRoot.CFrame = old end
-    end)
-end
-
 -- ==================== XỬ LÝ SOUND ====================
 local function getSoundId(sound)
     if not sound or not sound.SoundId then return nil end
@@ -991,7 +976,7 @@ local function onSoundStarted(player, sound, char, soundId)
         if CheckWall(myRoot.Position, root.Position) then return end
 
         fastBlock()
-        if isKiller(player) then teleportDodge(char) end
+        -- Teleport đã bị loại bỏ
     else
         -- Pro mode: lưu trạng thái đang tấn công
         if not activeAttackers[player] then
@@ -1088,9 +1073,7 @@ local function checkProBlock()
 
         lastProBlockTime = now
         fastBlock()
-        if isKiller(player) and player.Character then
-            teleportDodge(player.Character)
-        end
+        -- Teleport đã bị loại bỏ
         break
     end
 end
@@ -1198,4 +1181,3 @@ spawn(function()
         task.wait(0.02)
     end
 end)
-
