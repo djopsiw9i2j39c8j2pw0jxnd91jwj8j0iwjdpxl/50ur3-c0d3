@@ -1542,3 +1542,289 @@ getgenv().AutoPunchAPI = {
     SetDashSpeed = function(val) S.DashSpeed = tonumber(val) or 50 end,
     SetDashDelay = function(val) S.DashDelay = tonumber(val) or 0.1 end,
 }
+
+-- Veeronica auto trick
+
+-- Khởi tạo getgenv nếu chưa có
+if not getgenv().VeeronicaSettings then
+    getgenv().VeeronicaSettings = {
+        Sk8ControlEnabled = false,
+        AutoTrickEnabled = false,
+    }
+end
+
+local S = getgenv().VeeronicaSettings
+
+-- ================= CONSTANTS =================
+local VEER_SK8_DASH_SPEED = 60
+local VEER_SK8_ANIMATION_IDS = { "117058860640843" }
+
+-- ================= BIẾN NỘI BỘ =================
+local veerIsSk8Active = false
+local veerSk8Loop = nil
+local veerSavedHumanoid = {}
+local veerCamera = Workspace.CurrentCamera
+local veerActiveSk8Track = nil
+
+local autoTrickConnections = {}
+local autoTrickLoop = nil
+local autoTrickHighlights = {}
+
+-- ================= HÀM HỖ TRỢ =================
+local function veerGetHumanoid()
+    local char = Players.LocalPlayer.Character
+    if not char then return nil end
+    return char:FindFirstChildOfClass("Humanoid")
+end
+
+local function veerGetRootPart()
+    local char = Players.LocalPlayer.Character
+    if not char then return nil end
+    return char:FindFirstChild("HumanoidRootPart")
+end
+
+-- ================= SK8 CONTROL =================
+local function veerSaveHumanoidState(humanoid)
+    if not humanoid or veerSavedHumanoid[humanoid] then return end
+    local state = {
+        walkSpeed = humanoid.WalkSpeed,
+        jumpPower = humanoid.JumpPower or humanoid.JumpHeight,
+        platformStand = humanoid.PlatformStand
+    }
+    veerSavedHumanoid[humanoid] = state
+end
+
+local function veerRestoreHumanoidState(humanoid)
+    if not humanoid then return end
+    local state = veerSavedHumanoid[humanoid]
+    if not state then return end
+    humanoid.WalkSpeed = state.walkSpeed
+    if humanoid:FindFirstChild("JumpPower") then
+        humanoid.JumpPower = state.jumpPower
+    elseif humanoid:FindFirstChild("JumpHeight") then
+        humanoid.JumpHeight = state.jumpPower
+    end
+    humanoid.PlatformStand = state.platformStand
+    veerSavedHumanoid[humanoid] = nil
+end
+
+local function veerIsSk8AnimationActive()
+    local humanoid = veerGetHumanoid()
+    if not humanoid then return false end
+    for _, track in ipairs(humanoid:GetPlayingAnimationTracks()) do
+        local anim = track.Animation
+        if anim then
+            local id = tostring(anim.AnimationId):match("%d+")
+            if id and table.find(VEER_SK8_ANIMATION_IDS, id) then
+                return track
+            end
+        end
+    end
+    return false
+end
+
+local function veerStartSk8Override()
+    if veerIsSk8Active then return end
+    local humanoid = veerGetHumanoid()
+    local root = veerGetRootPart()
+    if not humanoid or not root then return end
+
+    veerIsSk8Active = true
+    veerSaveHumanoidState(humanoid)
+    humanoid.WalkSpeed = VEER_SK8_DASH_SPEED
+
+    if veerSk8Loop then veerSk8Loop:Disconnect() end
+
+    veerSk8Loop = RunService.RenderStepped:Connect(function()
+        local hum = veerGetHumanoid()
+        local rootPart = veerGetRootPart()
+        if not hum or not rootPart then
+            veerStopSk8Override()
+            return
+        end
+
+        hum.WalkSpeed = VEER_SK8_DASH_SPEED
+
+        local camLook = veerCamera.CFrame.LookVector
+        local moveDir = Vector3.new(camLook.X, 0, camLook.Z)
+        if moveDir.Magnitude > 0 then
+            moveDir = moveDir.Unit
+            hum:Move(moveDir, false)
+        end
+
+        local targetCFrame = CFrame.new(rootPart.Position, rootPart.Position + moveDir)
+        rootPart.CFrame = rootPart.CFrame:Lerp(targetCFrame, 0.3)
+    end)
+end
+
+local function veerStopSk8Override()
+    if not veerIsSk8Active then return end
+    veerIsSk8Active = false
+
+    if veerSk8Loop then
+        veerSk8Loop:Disconnect()
+        veerSk8Loop = nil
+    end
+
+    if veerActiveSk8Track then
+        pcall(function() veerActiveSk8Track.Stopped:Disconnect() end)
+        veerActiveSk8Track = nil
+    end
+
+    local humanoid = veerGetHumanoid()
+    if humanoid then
+        veerRestoreHumanoidState(humanoid)
+        humanoid:Move(Vector3.new(0, 0, 0), false)
+    end
+end
+
+-- ================= AUTO TRICK V3 =================
+local function getBehaviorFolder()
+    local ok, folder = pcall(function()
+        return ReplicatedStorage.Assets.Survivors.Veeronica.Behavior
+    end)
+    return ok and folder
+end
+
+local function getSprintingButton()
+    local gui = PlayerGui
+    if not gui then return nil end
+    local main = gui:FindFirstChild("MainUI")
+    if not main then return nil end
+    return main:FindFirstChild("SprintingButton")
+end
+
+local function adorneeIsPlayerCharacter(h)
+    if not h then return false end
+    local adornee = h.Adornee
+    local char = playerCharacter
+    if not adornee or not char then return false end
+    return adornee == char or adornee:IsDescendantOf(char)
+end
+
+local function triggerSprint()
+    local btn = getSprintingButton()
+    if not btn then return end
+
+    local conns = getconnections(btn.MouseButton1Down)
+    for _, v in pairs(conns) do
+        pcall(function()
+            v:Fire()
+            if v.Function then v:Function() end
+        end)
+    end
+end
+
+local function autoTrickCleanup()
+    for _, conn in ipairs(autoTrickConnections) do
+        if conn and conn.Connected then
+            conn:Disconnect()
+        end
+    end
+    autoTrickConnections = {}
+    autoTrickHighlights = {}
+
+    if autoTrickLoop then
+        autoTrickLoop:Disconnect()
+        autoTrickLoop = nil
+    end
+end
+
+local function startAutoTrick()
+    autoTrickCleanup()
+
+    local behaviorFolder = getBehaviorFolder()
+    if not behaviorFolder then
+        warn("[AutoTrick] Behavior folder not found.")
+        return
+    end
+
+    for _, child in ipairs(behaviorFolder:GetDescendants()) do
+        if child:IsA("Highlight") then
+            autoTrickHighlights[child] = true
+        end
+    end
+
+    local addConn = behaviorFolder.DescendantAdded:Connect(function(child)
+        if child:IsA("Highlight") then
+            autoTrickHighlights[child] = true
+        end
+    end)
+    local removeConn = behaviorFolder.DescendantRemoving:Connect(function(child)
+        if child:IsA("Highlight") then
+            autoTrickHighlights[child] = nil
+        end
+    end)
+
+    table.insert(autoTrickConnections, addConn)
+    table.insert(autoTrickConnections, removeConn)
+
+    autoTrickLoop = RunService.Heartbeat:Connect(function()
+        if not S.AutoTrickEnabled then return end
+        for h in pairs(autoTrickHighlights) do
+            if adorneeIsPlayerCharacter(h) then
+                triggerSprint()
+                break
+            end
+        end
+    end)
+end
+
+local function stopAutoTrick()
+    autoTrickCleanup()
+end
+
+-- ================= MAIN SK8 CONTROL LOOP =================
+RunService.RenderStepped:Connect(function()
+    if not S.Sk8ControlEnabled then
+        if veerIsSk8Active then veerStopSk8Override() end
+        return
+    end
+
+    local humanoid = veerGetHumanoid()
+    if not humanoid then
+        if veerIsSk8Active then veerStopSk8Override() end
+        return
+    end
+
+    local currentTrack = veerIsSk8AnimationActive()
+
+    if currentTrack and not veerIsSk8Active then
+        veerActiveSk8Track = currentTrack
+        currentTrack.Stopped:Connect(function()
+            if veerIsSk8Active then veerStopSk8Override() end
+        end)
+        veerStartSk8Override()
+    elseif not currentTrack and veerIsSk8Active then
+        veerStopSk8Override()
+    end
+end)
+
+-- ================= CHARACTER RESPAWN =================
+Players.LocalPlayer.CharacterAdded:Connect(function()
+    veerStopSk8Override()
+    veerSavedHumanoid = {}
+
+    if S.AutoTrickEnabled then
+        stopAutoTrick()
+        startAutoTrick()
+    end
+end)
+
+-- ================= API CHO UI =================
+getgenv().VeeronicaAPI = {
+    SetSk8Control = function(val)
+        S.Sk8ControlEnabled = val
+        if not val and veerIsSk8Active then
+            veerStopSk8Override()
+        end
+    end,
+    SetAutoTrick = function(val)
+        S.AutoTrickEnabled = val
+        if val then
+            startAutoTrick()
+        else
+            stopAutoTrick()
+        end
+    end,
+}
