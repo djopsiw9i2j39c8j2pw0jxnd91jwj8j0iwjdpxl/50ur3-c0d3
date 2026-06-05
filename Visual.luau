@@ -2242,3 +2242,255 @@ getgenv().ShedletskyAPI = {
     SetChickenHP = function(val) S.ChickenHPThreshold = tonumber(val) or 40 end,
     SetChickenDistance = function(val) S.ChickenDistance = tonumber(val) or 100 end,
 }
+
+-- Chance Aimbot 
+
+if not getgenv().ChanceSettings then
+    getgenv().ChanceSettings = {
+        AimbotActive = false,
+        AimUseOffset = false,
+        PredictionMode = "Speed",
+        AimMode = "Normal",
+        AimDuration = 1.7,
+        AimFasterDuration = 1.5,
+        AimSpinDuration = 0.5,
+        AutoCoinflip = false,
+        CoinflipTargetCharge = 3,
+        CoinflipBlockWhenClose = true,
+        CoinflipBlockDist = 50,
+    }
+end
+
+local S = getgenv().ChanceSettings
+
+-- Biến nội bộ
+local isAiming = false
+local aimStartTime = 0
+local prevFlintVisible = false
+local lastCoinflipTime = 0
+local coinflipCooldown = 0.15
+
+-- Remote
+local remoteEvent = ReplicatedStorage:FindFirstChild("Modules")
+    and ReplicatedStorage.Modules:FindFirstChild("Network")
+    and ReplicatedStorage.Modules.Network:FindFirstChild("RemoteEvent")
+
+-- Hàm click button (dùng connections)
+local function clickButton(btn)
+    if not btn then return end
+    local success = pcall(function()
+        local connections = getconnections(btn.MouseButton1Click)
+        if connections then
+            for _, conn in ipairs(connections) do
+                pcall(function() conn:Fire() end)
+            end
+            return true
+        end
+    end)
+    if success then return end
+    pcall(function() firesignal(btn.MouseButton1Click) end)
+    pcall(function() firesignal(btn.MouseButton1Down) end)
+    pcall(function() firesignal(btn.MouseButton1Up) end)
+    pcall(function() firesignal(btn.Activated) end)
+    pcall(function() btn:Activate() end)
+end
+
+-- Lấy ping (fallback 0.1 nếu không có Stats)
+local function getPingSeconds()
+    local success, stat = pcall(function() return Stats.Network.ServerStatsItem["Data Ping"] end)
+    if not success or not stat then return 0.1 end
+    local success2, value = pcall(function() return stat:GetValue() end)
+    if success2 and type(value) == "number" then return value / 1000 end
+    return 0.1
+end
+
+-- Kiểm tra Flintlock đang hiện
+local function isFlintlockVisible()
+    local char = playerCharacter
+    if not char then return false end
+    local success, flint = pcall(function() return char:FindFirstChild("Flintlock", true) end)
+    if not success or not flint then return false end
+    if not flint:IsA("BasePart") then return false end
+    return flint.Transparency < 1
+end
+
+-- Lấy HRP killer gần nhất
+local function getNearestKillerHRP()
+    local nearest, minDist = nil, math.huge
+    local myRoot = playerCharacter and playerCharacter:FindFirstChild("HumanoidRootPart")
+    if not myRoot then return nil end
+    for _, killer in ipairs(killersFolder:GetChildren()) do
+        if killer:IsA("Model") then
+            local hum = killer:FindFirstChild("Humanoid")
+            local hrp = killer:FindFirstChild("HumanoidRootPart")
+            if hum and hrp and hum.Health > 0 then
+                local dist = (myRoot.Position - hrp.Position).Magnitude
+                if dist < minDist then
+                    minDist = dist
+                    nearest = hrp
+                end
+            end
+        end
+    end
+    return nearest
+end
+
+-- Dự đoán vị trí
+local function getPredictedPos(targetHRP)
+    if not targetHRP then return nil end
+    local ping = getPingSeconds()
+    local mode = S.PredictionMode
+    if mode == "Ping" then
+        return targetHRP.Position + (targetHRP.Velocity or Vector3.zero) * ping
+    elseif mode == "front" then
+        return targetHRP.Position + (targetHRP.CFrame and targetHRP.CFrame.LookVector or Vector3.new()) * 4
+    elseif mode == "No Lag" then
+        return targetHRP.Position + (targetHRP.CFrame and targetHRP.CFrame.LookVector or Vector3.new()) * (ping * 60)
+    else -- Speed (mặc định)
+        if S.AimUseOffset then
+            return targetHRP.Position + (targetHRP.Velocity or Vector3.zero) * (4 / 60)
+        else
+            return targetHRP.Position
+        end
+    end
+end
+
+-- Tìm nút Coinflip
+local function findCoinflipButton()
+    local mainUI = PlayerGui:FindFirstChild("MainUI")
+    local container = mainUI and mainUI:FindFirstChild("AbilityContainer")
+    if not container then return nil end
+    for _, obj in ipairs(container:GetDescendants()) do
+        if obj:IsA("TextButton") or obj:IsA("ImageButton") then
+            local n = string.lower(obj.Name)
+            local t = pcall(function() return string.lower(obj.Text) end) and string.lower(obj.Text) or ""
+            if n:find("coin") or n:find("flip") or t:find("coin") or t:find("flip") then
+                return obj
+            end
+        end
+    end
+    return nil
+end
+
+-- Lấy điểm cao nhất
+local function getNearbyMaxNumber()
+    local mainUI = PlayerGui:FindFirstChild("MainUI")
+    local container = mainUI and mainUI:FindFirstChild("AbilityContainer")
+    if not container then return nil end
+    local maxNum = nil
+    for _, obj in ipairs(container:GetDescendants()) do
+        if (obj:IsA("TextLabel") or obj:IsA("TextButton") or obj:IsA("TextBox")) and pcall(function() return obj.Text end) then
+            local text = tostring(obj.Text)
+            local n = tonumber(text)
+            if n and n >= 1 and n <= 3 then
+                if not maxNum or n > maxNum then
+                    maxNum = n
+                end
+            end
+        end
+    end
+    return maxNum
+end
+
+-- Main loop
+RunService.Heartbeat:Connect(function()
+    -- ========== AIMBOT ==========
+    if S.AimbotActive then
+        local visible = isFlintlockVisible()
+
+        -- Cạnh lên: flintlock vừa xuất hiện -> bắt đầu aim
+        if visible and not prevFlintVisible and not isAiming then
+            isAiming = true
+            aimStartTime = tick()
+        end
+
+        prevFlintVisible = visible
+
+        if isAiming then
+            local elapsed = tick() - aimStartTime
+            local duration = (S.AimMode == "Faster") and S.AimFasterDuration or S.AimDuration
+
+            -- Reflex: quay tròn trong SpinDuration
+            if S.AimMode == "Reflex" and elapsed <= S.AimSpinDuration then
+                local hrp = playerCharacter and playerCharacter:FindFirstChild("HumanoidRootPart")
+                local hum = playerCharacter and playerCharacter:FindFirstChildOfClass("Humanoid")
+                if hrp then
+                    if hum then hum.AutoRotate = false end
+                    local angle = math.rad(360 * (elapsed / S.AimSpinDuration))
+                    hrp.CFrame = CFrame.new(hrp.Position) * CFrame.Angles(0, angle, 0)
+                end
+            -- Aim bình thường (sau Spin hoặc chế độ khác)
+            elseif elapsed <= duration then
+                local targetHRP = getNearestKillerHRP()
+                if targetHRP then
+                    local predicted = getPredictedPos(targetHRP)
+                    if predicted then
+                        local hrp = playerCharacter and playerCharacter:FindFirstChild("HumanoidRootPart")
+                        local hum = playerCharacter and playerCharacter:FindFirstChildOfClass("Humanoid")
+                        if hrp then
+                            if hum then hum.AutoRotate = false end
+                            hrp.CFrame = CFrame.lookAt(hrp.Position, predicted)
+                        end
+                    end
+                end
+            else
+                -- Hết thời gian aim
+                isAiming = false
+                local hum = playerCharacter and playerCharacter:FindFirstChildOfClass("Humanoid")
+                if hum then hum.AutoRotate = true end
+            end
+        end
+    else
+        -- Tắt aimbot -> reset trạng thái
+        if isAiming then
+            isAiming = false
+            local hum = playerCharacter and playerCharacter:FindFirstChildOfClass("Humanoid")
+            if hum then hum.AutoRotate = true end
+        end
+        prevFlintVisible = isFlintlockVisible()
+    end
+
+    -- ========== AUTO COINFLIP ==========
+    if S.AutoCoinflip then
+        local block = false
+        if S.CoinflipBlockWhenClose then
+            local targetHRP = getNearestKillerHRP()
+            local myRoot = playerCharacter and playerCharacter:FindFirstChild("HumanoidRootPart")
+            if targetHRP and myRoot then
+                local dist = (targetHRP.Position - myRoot.Position).Magnitude
+                if dist <= S.CoinflipBlockDist then
+                    block = true
+                end
+            end
+        end
+
+        if not block and tick() - lastCoinflipTime >= coinflipCooldown then
+            local maxNum = getNearbyMaxNumber()
+            if not maxNum or maxNum < S.CoinflipTargetCharge then
+                lastCoinflipTime = tick()
+                local btn = findCoinflipButton()
+                if btn then
+                    clickButton(btn)
+                end
+            end
+        end
+    end
+end)
+
+-- Khi chết/reset
+Players.LocalPlayer.CharacterAdded:Connect(function()
+    isAiming = false
+    prevFlintVisible = false
+end)
+
+-- API cho UI
+getgenv().ChanceAPI = {
+    SetAimbot = function(v) S.AimbotActive = v end,
+    SetOffset = function(v) S.AimUseOffset = v end,
+    SetPrediction = function(v) S.PredictionMode = v end,
+    SetAimMode = function(v) S.AimMode = v end,
+    SetCoinflip = function(v) S.AutoCoinflip = v end,
+    SetTargetCharge = function(v) S.CoinflipTargetCharge = tonumber(v) or 3 end,
+    SetBlockWhenClose = function(v) S.CoinflipBlockWhenClose = v end,
+    SetBlockDist = function(v) S.CoinflipBlockDist = tonumber(v) or 50 end,
+}
