@@ -2494,3 +2494,260 @@ getgenv().ChanceAPI = {
     SetBlockWhenClose = function(v) S.CoinflipBlockWhenClose = v end,
     SetBlockDist = function(v) S.CoinflipBlockDist = tonumber(v) or 50 end,
 }
+
+-- Eliot Aimbot
+
+if not getgenv().EliotSettings then
+    getgenv().EliotSettings = {
+        PizzaAimbotEnabled = false,
+        AimDistance = 100,
+        AimOffset = 2,
+        AutoEatPizzaEnabled = false,
+        EatPizzaHPThreshold = 30,
+    }
+end
+
+local S = getgenv().EliotSettings
+
+-- Biến nội bộ Aimbot
+local currentTarget = nil
+local isLockedOn = false
+local wasPlayingAnimation = false
+local autoRotateDisabledByScript = false
+local pizzaAnimations = {
+    ["114155003741146"] = true,
+    ["104033348426533"] = true,
+}
+local eliotModels = { ["Elliot"] = true }
+
+-- Biến nội bộ Eat Pizza
+local eatPizzaActive = false
+
+-- Remote event (nếu cần gửi cập nhật vị trí)
+local remoteEvent = ReplicatedStorage:FindFirstChild("Modules")
+    and ReplicatedStorage.Modules:FindFirstChild("Network")
+    and ReplicatedStorage.Modules.Network:FindFirstChild("RemoteEvent")
+
+-- ================= HÀM HỖ TRỢ CHUNG =================
+local function isEliot()
+    local char = playerCharacter
+    return char and eliotModels[char.Name] or false
+end
+
+local function getHumanoid()
+    return playerCharacter and playerCharacter:FindFirstChildOfClass("Humanoid")
+end
+
+local function getHRP()
+    return playerCharacter and playerCharacter:FindFirstChild("HumanoidRootPart")
+end
+
+local function restoreAutoRotate()
+    local hum = getHumanoid()
+    if hum and autoRotateDisabledByScript then
+        hum.AutoRotate = true
+        autoRotateDisabledByScript = false
+    end
+end
+
+-- ================= PIZZA AIMBOT =================
+local function isPlayingDangerousAnimation()
+    local hum = getHumanoid()
+    if not hum then return false end
+    local animator = hum:FindFirstChildWhichIsA("Animator")
+    if not animator then return false end
+    for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
+        local animId = track.Animation and tostring(track.Animation.AnimationId):match("%d+")
+        if animId and pizzaAnimations[animId] then
+            return true
+        end
+    end
+    return false
+end
+
+local function getWeakestSurvivor()
+    if not survivorsFolder then return nil end
+    local myChar = playerCharacter
+    local myHum = getHumanoid()
+    local myRoot = getHRP()
+    if not myHum or not myRoot or not myHum.MaxHealth or myHum.MaxHealth <= 0 then return nil end
+
+    local myHpPercent = myHum.Health / myHum.MaxHealth
+    local list = {}
+
+    for _, mdl in ipairs(survivorsFolder:GetChildren()) do
+        if mdl:IsA("Model") and mdl ~= myChar then
+            local hum = mdl:FindFirstChildOfClass("Humanoid")
+            local hrp = mdl:FindFirstChild("HumanoidRootPart")
+            if hum and hrp and hum.Health > 0 and hum.MaxHealth > 0 then
+                local dist = (hrp.Position - myRoot.Position).Magnitude
+                if dist <= S.AimDistance then
+                    table.insert(list, { model = mdl, hp = hum.Health / hum.MaxHealth })
+                end
+            end
+        end
+    end
+
+    if #list == 0 then return nil end
+    table.sort(list, function(a, b) return a.hp < b.hp end)
+
+    -- Nếu mình yếu nhất, chọn kẻ yếu thứ hai (nếu có), nếu không lấy chính kẻ yếu nhất
+    if myHpPercent <= list[1].hp and #list > 1 then
+        return list[2].model
+    else
+        return list[1].model
+    end
+end
+
+-- ================= AUTO EAT PIZZA =================
+local function findMap()
+    -- Thử tìm map trong Workspace
+    local mapContainer = Workspace:FindFirstChild("Map")
+    if mapContainer then
+        local ingame = mapContainer:FindFirstChild("Ingame")
+        if ingame then
+            local map = ingame:FindFirstChild("Map")
+            if map then return map end
+        end
+    end
+    -- Fallback: tìm trực tiếp "Map" trong Workspace
+    return Workspace:FindFirstChild("Map")
+end
+
+local function getPizzaCF()
+    local map = findMap()
+    if not map then return nil end
+
+    local pizza = map:FindFirstChild("Pizza")
+    if not pizza then return nil end
+
+    if pizza:IsA("BasePart") or pizza:IsA("MeshPart") or pizza:IsA("UnionOperation") then
+        return pizza.CFrame
+    elseif pizza:IsA("Model") then
+        local pp = pizza.PrimaryPart or pizza:FindFirstChildWhichIsA("BasePart")
+        if pp then
+            if not pizza.PrimaryPart then pizza.PrimaryPart = pp end
+            return pp.CFrame
+        end
+    elseif pizza:IsA("CFrameValue") then
+        return pizza.Value
+    end
+    return nil
+end
+
+local function tryEatPizza()
+    local hrp = getHRP()
+    local hum = getHumanoid()
+    if not hrp or not hum then return end
+    if hum.Health > S.EatPizzaHPThreshold then return end
+
+    local pizzaCF = getPizzaCF()
+    if not pizzaCF then return end
+
+    local oldCF = hrp.CFrame
+    hrp.CFrame = pizzaCF * CFrame.new(0, 1, 0)
+
+    -- Gửi remote update vị trí (nếu có remoteEvent và cần)
+    if remoteEvent then
+        pcall(function()
+            remoteEvent:FireServer("UnreliableRemoteEvent", "UpdCF")
+        end)
+    end
+
+    task.delay(0.2, function()
+        pcall(function()
+            hrp.CFrame = oldCF
+            task.wait(0.3)
+            -- Gửi tín hiệu kết thúc (nếu cần)
+            if remoteEvent then
+                pcall(function()
+                    remoteEvent:FireServer("UnreliableRemoteEvent", "UpdCF")
+                end)
+            end
+        end)
+    end)
+end
+
+-- ================= MAIN LOOPS =================
+-- Aimbot loop
+RunService.RenderStepped:Connect(function()
+    if not S.PizzaAimbotEnabled then
+        restoreAutoRotate()
+        currentTarget, isLockedOn, wasPlayingAnimation = nil, false, false
+        return
+    end
+
+    if not isEliot() then
+        restoreAutoRotate()
+        currentTarget, isLockedOn, wasPlayingAnimation = nil, false, false
+        return
+    end
+
+    local hum = getHumanoid()
+    local root = getHRP()
+    if not hum or not root then return end
+
+    local playing = isPlayingDangerousAnimation()
+
+    -- Bắt đầu lock khi animation bắt đầu
+    if playing and not isLockedOn then
+        currentTarget = getWeakestSurvivor()
+        if currentTarget then isLockedOn = true end
+    end
+
+    -- Kiểm tra target còn sống không
+    if isLockedOn and currentTarget then
+        local tHum = currentTarget:FindFirstChildOfClass("Humanoid")
+        local tRoot = currentTarget:FindFirstChild("HumanoidRootPart")
+        if not (tHum and tRoot and tHum.Health > 0) then
+            currentTarget, isLockedOn = nil, false
+        end
+    end
+
+    -- Khi animation kết thúc, unlock
+    if (not playing) and wasPlayingAnimation then
+        currentTarget, isLockedOn = nil, false
+        restoreAutoRotate()
+    end
+    wasPlayingAnimation = playing
+
+    -- Thực hiện aim khi đang lock
+    if playing and isLockedOn and currentTarget then
+        local tRoot = currentTarget:FindFirstChild("HumanoidRootPart")
+        if tRoot then
+            if not autoRotateDisabledByScript then
+                hum.AutoRotate = false
+                autoRotateDisabledByScript = true
+            end
+
+            -- Tính vị trí aim có offset sang phải
+            local offsetPos = tRoot.Position + root.CFrame.RightVector * S.AimOffset
+            local targetPos = Vector3.new(offsetPos.X, root.Position.Y, offsetPos.Z)
+            root.CFrame = CFrame.lookAt(root.Position, targetPos)
+        end
+    end
+end)
+
+-- Auto Eat Pizza loop (chạy mỗi 0.9s như script gốc)
+task.spawn(function()
+    while task.wait(0.9) do
+        if S.AutoEatPizzaEnabled and isEliot() then
+            tryEatPizza()
+        end
+    end
+end)
+
+-- Khi chết/reset
+Players.LocalPlayer.CharacterAdded:Connect(function()
+    autoRotateDisabledByScript = false
+    currentTarget, isLockedOn, wasPlayingAnimation = nil, false, false
+end)
+
+-- ================= API CHO UI =================
+getgenv().EliotAPI = {
+    SetPizzaAimbot = function(v) S.PizzaAimbotEnabled = v end,
+    SetAimDistance = function(v) S.AimDistance = tonumber(v) or 100 end,
+    SetAimOffset = function(v) S.AimOffset = tonumber(v) or 2 end,
+    SetAutoEatPizza = function(v) S.AutoEatPizzaEnabled = v end,
+    SetHPThreshold = function(v) S.EatPizzaHPThreshold = tonumber(v) or 30 end,
+}
