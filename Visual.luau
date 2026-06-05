@@ -1181,3 +1181,357 @@ spawn(function()
         task.wait(0.02)
     end
 end)
+
+-- Auto Punch Logic
+
+-- Khởi tạo getgenv nếu chưa có
+if not getgenv().AutoPunchSettings then
+    getgenv().AutoPunchSettings = {
+        AimMode = "Character",
+        AutoPunchEnabled = false,
+        AimbotPunchEnabled = true,
+        UseDistanceCheck = false,
+        PunchDistance = 10,
+        DelayTime = 0.5,
+        AimDuration = 1,
+        CameraAimSpeed = 8,
+        -- Dash
+        DashPunchEnabled = false,
+        DashRange = 30,
+        DashSpeed = 50,
+        DashDelay = 0.1,
+    }
+end
+
+local S = getgenv().AutoPunchSettings
+
+-- ================= REMOTE =================
+local remote = ReplicatedStorage:FindFirstChild("Modules") and ReplicatedStorage.Modules:FindFirstChild("Network") and ReplicatedStorage.Modules.Network:FindFirstChild("RemoteEvent")
+
+-- ================= CONFIG =================
+local SoundIDs = {
+    ["132298811847315"] = true,
+    ["18568553101"] = true,
+}
+local AnimationIDs = {
+    ["87259391926321"] = true,
+    ["140703210927645"] = true,
+    ["136007065400978"] = true,
+    ["129843313690921"] = true,
+    ["86709774283672"] = true,
+    ["108807732150251"] = true,
+    ["138040001965654"] = true,
+    ["86096387000557"] = true,
+}
+
+-- ================= BIẾN NỘI BỘ =================
+local isPunchProcessing = false
+local soundListener = nil
+local animationListener = nil
+local aimCoroutine = nil
+local dashCoroutine = nil
+local lastPunchTarget = nil
+
+-- ================= HÀM HỖ TRỢ =================
+local function clickPunchButton(btn)
+    if not btn then return end
+    local success = pcall(function()
+        local connections = getconnections(btn.MouseButton1Click)
+        if connections then
+            for _, conn in ipairs(connections) do
+                pcall(function() conn:Fire() end)
+            end
+            return true
+        end
+    end)
+    if success then return end
+    pcall(function() firesignal(btn.MouseButton1Click) end)
+    pcall(function() firesignal(btn.MouseButton1Down) end)
+    pcall(function() firesignal(btn.MouseButton1Up) end)
+    pcall(function() firesignal(btn.Activated) end)
+    pcall(function() btn:Activate() end)
+end
+
+local function tryActivatePunchViaUI()
+    local mainUI = PlayerGui:FindFirstChild("MainUI")
+    local container = mainUI and mainUI:FindFirstChild("AbilityContainer")
+    if not container then return false end
+    local punchBtn = container:FindFirstChild("Punch")
+    if not punchBtn then return false end
+    local charges = punchBtn:FindFirstChild("Charges")
+    if charges and charges.Text == "0" then return false end
+    clickPunchButton(punchBtn)
+    return true
+end
+
+local function tryActivatePunchViaRemote()
+    if not remote then return false end
+    local charges = PlayerGui:FindFirstChild("MainUI") 
+        and PlayerGui.MainUI:FindFirstChild("AbilityContainer")
+        and PlayerGui.MainUI.AbilityContainer:FindFirstChild("Punch")
+        and PlayerGui.MainUI.AbilityContainer.Punch:FindFirstChild("Charges")
+    if charges and charges.Text == "0" then return false end
+    pcall(function()
+        remote:FireServer("UseActorAbility", {"Punch"})
+    end)
+    return true
+end
+
+local function getNearestKiller()
+    local nearestRoot = nil
+    local minDist = math.huge
+    local myRoot = playerCharacter and playerCharacter:FindFirstChild("HumanoidRootPart")
+    if not myRoot then return nil, nil end
+    for _, killer in ipairs(killersFolder:GetChildren()) do
+        if killer:IsA("Model") then
+            local humanoid = killer:FindFirstChild("Humanoid")
+            local root = killer:FindFirstChild("HumanoidRootPart")
+            if humanoid and root and humanoid.Health > 0 then
+                local dist = (myRoot.Position - root.Position).Magnitude
+                if dist < minDist then
+                    minDist = dist
+                    nearestRoot = root
+                end
+            end
+        end
+    end
+    return nearestRoot, minDist
+end
+
+local function findTargetForAim()
+    local target = getNearestKiller()
+    if target then return target end
+    for _ = 1, 3 do
+        wait(0.1)
+        target = getNearestKiller()
+        if target then return target end
+    end
+    if lastPunchTarget and lastPunchTarget.Parent and lastPunchTarget.Parent:FindFirstChild("HumanoidRootPart") == lastPunchTarget then
+        local hum = lastPunchTarget.Parent:FindFirstChild("Humanoid")
+        if hum and hum.Health > 0 then
+            return lastPunchTarget
+        end
+    end
+    return nil
+end
+
+-- ================= DASH PUNCH (DÙNG LỰC ĐẨY) =================
+local function stopDash()
+    if dashCoroutine then
+        coroutine.close(dashCoroutine)
+        dashCoroutine = nil
+    end
+end
+
+local function dashToKiller(targetRoot, speed, range)
+    if not targetRoot or not playerCharacter then return end
+    local myRoot = playerCharacter:FindFirstChild("HumanoidRootPart")
+    if not myRoot then return end
+    
+    local dist = (myRoot.Position - targetRoot.Position).Magnitude
+    if dist > range then return end
+    
+    local direction = (targetRoot.Position - myRoot.Position).Unit
+    local dashTime = dist / speed
+    local startTime = tick()
+    
+    local connection
+    connection = RunService.Heartbeat:Connect(function(deltaTime)
+        if tick() - startTime >= dashTime then
+            connection:Disconnect()
+            myRoot.Velocity = Vector3.zero
+            return
+        end
+        
+        local currentTarget = targetRoot.Parent and targetRoot.Parent:FindFirstChild("HumanoidRootPart")
+        if not currentTarget then
+            connection:Disconnect()
+            return
+        end
+        
+        direction = (currentTarget.Position - myRoot.Position).Unit
+        myRoot.Velocity = direction * speed
+        myRoot.CFrame = myRoot.CFrame:Lerp(
+            CFrame.new(myRoot.Position, currentTarget.Position),
+            math.min(1, deltaTime * 10)
+        )
+    end)
+end
+
+local function startDash(targetRoot)
+    if not targetRoot or not playerCharacter then return end
+    stopDash()
+    
+    local speed = S.DashSpeed
+    local range = S.DashRange
+    local delay = S.DashDelay
+    
+    dashCoroutine = coroutine.create(function()
+        wait(delay)
+        pcall(function()
+            dashToKiller(targetRoot, speed, range)
+        end)
+        dashCoroutine = nil
+    end)
+    coroutine.resume(dashCoroutine)
+end
+
+-- ================= AIM =================
+local function startContinuousAim(targetRoot, duration)
+    if not targetRoot or not playerCharacter then return end
+    local myRoot = playerCharacter:FindFirstChild("HumanoidRootPart")
+    if not myRoot then return end
+
+    if aimCoroutine then
+        coroutine.close(aimCoroutine)
+        aimCoroutine = nil
+    end
+
+    aimCoroutine = coroutine.create(function()
+        local startTime = tick()
+        local hum = playerCharacter:FindFirstChild("Humanoid")
+        local cam = workspace.CurrentCamera
+
+        if hum then hum.AutoRotate = false end
+
+        local heartbeat
+        heartbeat = RunService.Heartbeat:Connect(function(deltaTime)
+            if tick() - startTime >= duration then
+                heartbeat:Disconnect()
+                if hum then hum.AutoRotate = true end
+                aimCoroutine = nil
+                return
+            end
+
+            local currentRoot = targetRoot.Parent and targetRoot.Parent:FindFirstChild("HumanoidRootPart")
+            if not currentRoot then
+                local newRoot = findTargetForAim()
+                if newRoot then currentRoot = newRoot else return end
+            end
+            if not currentRoot then return end
+
+            local myCurrentRoot = playerCharacter:FindFirstChild("HumanoidRootPart")
+            if not myCurrentRoot then return end
+
+            if S.AimMode == "Character" then
+                myCurrentRoot.CFrame = CFrame.lookAt(myCurrentRoot.Position, currentRoot.Position)
+            elseif S.AimMode == "Camera" then
+                myCurrentRoot.CFrame = CFrame.lookAt(myCurrentRoot.Position, currentRoot.Position)
+                if cam then
+                    local desiredCF = CFrame.lookAt(cam.CFrame.Position, currentRoot.Position)
+                    cam.CFrame = cam.CFrame:Lerp(desiredCF, math.min(1, deltaTime * S.CameraAimSpeed))
+                end
+            end
+        end)
+    end)
+    coroutine.resume(aimCoroutine)
+end
+
+-- ================= TRIGGERS =================
+local function triggerPunch()
+    if not S.AutoPunchEnabled or isPunchProcessing then return end
+    local nearestRoot, dist = getNearestKiller()
+    if not nearestRoot then return end
+    if S.UseDistanceCheck and dist > S.PunchDistance then return end
+
+    lastPunchTarget = nearestRoot
+    isPunchProcessing = true
+    
+    local success = tryActivatePunchViaUI()
+    if not success then tryActivatePunchViaRemote() end
+    
+    wait(0.6)
+    isPunchProcessing = false
+end
+
+local function triggerAim()
+    if not S.AutoPunchEnabled then return end
+
+    local target = findTargetForAim()
+    if not target then return end
+
+    if S.UseDistanceCheck then
+        local myRoot = playerCharacter and playerCharacter:FindFirstChild("HumanoidRootPart")
+        if myRoot and (myRoot.Position - target.Position).Magnitude > S.PunchDistance then
+            return
+        end
+    end
+
+    if S.DashPunchEnabled then
+        startDash(target)
+    end
+
+    if S.AimbotPunchEnabled then
+        if S.AimMode == "CharacterDelay" then
+            coroutine.wrap(function()
+                wait(S.DelayTime)
+                startContinuousAim(target, S.AimDuration)
+            end)()
+        else
+            startContinuousAim(target, S.AimDuration)
+        end
+    end
+end
+
+local function setupListeners()
+    if soundListener then soundListener:Disconnect(); soundListener = nil end
+    if animationListener then animationListener:Disconnect(); animationListener = nil end
+    if not playerCharacter then return end
+
+    soundListener = playerCharacter.DescendantAdded:Connect(function(desc)
+        if desc:IsA("Sound") then
+            local id = string.match(desc.SoundId, "rbxassetid://(%d+)")
+            if id and SoundIDs[id] then triggerPunch() end
+        end
+    end)
+
+    local humanoid = playerCharacter:FindFirstChild("Humanoid")
+    if humanoid then
+        local animator = humanoid:FindFirstChild("Animator")
+        if animator then
+            animationListener = animator.AnimationPlayed:Connect(function(track)
+                if track and track.Animation then
+                    local id = string.match(track.Animation.AnimationId, "rbxassetid://(%d+)")
+                    if id and AnimationIDs[id] then triggerAim() end
+                end
+            end)
+        end
+    end
+end
+
+-- ================= CẬP NHẬT KHI CHARACTER SPAWN =================
+localPlayer.CharacterAdded:Connect(function(character)
+    playerCharacter = character
+    if S.AutoPunchEnabled then setupListeners() end
+end)
+
+if S.AutoPunchEnabled and playerCharacter then
+    setupListeners()
+end
+
+-- ================= API CHO UI =================
+getgenv().AutoPunchAPI = {
+    SetAutoPunch = function(val)
+        S.AutoPunchEnabled = val
+        if val then setupListeners()
+        else
+            if soundListener then soundListener:Disconnect(); soundListener = nil end
+            if animationListener then animationListener:Disconnect(); animationListener = nil end
+            stopDash()
+        end
+    end,
+    SetAimbot = function(val) S.AimbotPunchEnabled = val end,
+    SetAimMode = function(val) S.AimMode = val end,
+    SetUseDistanceCheck = function(val) S.UseDistanceCheck = val end,
+    SetPunchDistance = function(val) S.PunchDistance = tonumber(val) or 10 end,
+    SetDelayTime = function(val) S.DelayTime = tonumber(val) or 0.5 end,
+    SetAimDuration = function(val) S.AimDuration = tonumber(val) or 1 end,
+    SetCameraAimSpeed = function(val) S.CameraAimSpeed = tonumber(val) or 8 end,
+    SetDashPunch = function(val) 
+        S.DashPunchEnabled = val 
+        if not val then stopDash() end 
+    end,
+    SetDashRange = function(val) S.DashRange = tonumber(val) or 30 end,
+    SetDashSpeed = function(val) S.DashSpeed = tonumber(val) or 50 end,
+    SetDashDelay = function(val) S.DashDelay = tonumber(val) or 0.1 end,
+}
