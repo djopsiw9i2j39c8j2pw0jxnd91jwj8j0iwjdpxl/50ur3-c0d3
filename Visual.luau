@@ -1843,7 +1843,8 @@ if not getgenv().TwoTimeDaggerSettings then
     }
 end
 
-local S = getgenv().TwoTimeDaggerSettings
+-- Đã đổi từ S thành D
+local D = getgenv().TwoTimeDaggerSettings
 
 -- ================= BIẾN NỘI BỘ =================
 local twoTimeDaggerBtn = nil
@@ -1878,7 +1879,7 @@ end
 
 -- ================= HÀM DASH =================
 local function twoTimeDash()
-    if not S.DashEnabled then return end
+    if not D.DashEnabled then return end
     local char = playerCharacter
     local hrp = char and char:FindFirstChild("HumanoidRootPart")
     if not hrp then return end
@@ -1894,7 +1895,7 @@ local function twoTimeDash()
             hrp.Velocity = Vector3.zero
             return
         end
-        hrp.Velocity = dashDirection * S.DashSpeed
+        hrp.Velocity = dashDirection * D.DashSpeed
     end)
 end
 
@@ -2012,16 +2013,16 @@ local function twoTimeAimTPBack(killer, khrp, hrp)
 end
 
 local function twoTimeApplyAim(killer, khrp, hrp)
-    if S.AimDaggerMode == "LookVector" then
+    if D.AimDaggerMode == "LookVector" then
         twoTimeAimLookVector(khrp, hrp)
-    elseif S.AimDaggerMode == "TPBack" then
+    elseif D.AimDaggerMode == "TPBack" then
         twoTimeAimTPBack(killer, khrp, hrp)
     end
 end
 
 -- ================= MAIN LOGIC =================
 local function twoTimeAttemptDagger()
-    if not S.AutoDaggerEnabled then return end
+    if not D.AutoDaggerEnabled then return end
 
     if not twoTimeDaggerBtn or not twoTimeCooldownLabel then
         twoTimeRefreshUI()
@@ -2037,10 +2038,10 @@ local function twoTimeAttemptDagger()
         if not killer:IsA("Model") then continue end
         local humanoid = killer:FindFirstChild("Humanoid")
         local khrp = killer:FindFirstChild("HumanoidRootPart")
-        if humanoid and khrp and humanoid.Health > 0 and (hrp.Position - khrp.Position).Magnitude <= S.DaggerRadius then
+        if humanoid and khrp and humanoid.Health > 0 and (hrp.Position - khrp.Position).Magnitude <= D.DaggerRadius then
             if not isBehindKiller(khrp, hrp) then continue end
 
-            if S.AimDaggerEnabled then
+            if D.AimDaggerEnabled then
                 twoTimeApplyAim(killer, khrp, hrp)
             end
             twoTimeFireDagger()
@@ -2066,10 +2067,10 @@ RunService.Heartbeat:Connect(twoTimeAttemptDagger)
 
 -- ================= API CHO UI =================
 getgenv().TwoTimeDaggerAPI = {
-    SetAutoDagger = function(val) S.AutoDaggerEnabled = val end,
-    SetAimDagger = function(val) S.AimDaggerEnabled = val end,
-    SetAimMode = function(val) S.AimDaggerMode = val end,
-    SetRadius = function(val) S.DaggerRadius = tonumber(val) or 4 end,
-    SetDash = function(val) S.DashEnabled = val end,
-    SetDashSpeed = function(val) S.DashSpeed = tonumber(val) or 50 end,
+    SetAutoDagger = function(val) D.AutoDaggerEnabled = val end,
+    SetAimDagger = function(val) D.AimDaggerEnabled = val end,
+    SetAimMode = function(val) D.AimDaggerMode = val end,
+    SetRadius = function(val) D.DaggerRadius = tonumber(val) or 4 end,
+    SetDash = function(val) D.DashEnabled = val end,
+    SetDashSpeed = function(val) D.DashSpeed = tonumber(val) or 50 end,
 }
