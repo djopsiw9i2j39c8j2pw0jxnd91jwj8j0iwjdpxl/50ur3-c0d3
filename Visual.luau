@@ -1828,3 +1828,248 @@ getgenv().VeeronicaAPI = {
         end
     end,
 }
+
+-- Auto Dagger Aim
+
+-- Khởi tạo getgenv nếu chưa có
+if not getgenv().TwoTimeDaggerSettings then
+    getgenv().TwoTimeDaggerSettings = {
+        AutoDaggerEnabled = false,
+        AimDaggerEnabled = false,
+        AimDaggerMode = "LookVector",
+        DaggerRadius = 4,
+        DashEnabled = false,
+        DashSpeed = 50
+    }
+end
+
+local S = getgenv().TwoTimeDaggerSettings
+
+-- ================= BIẾN NỘI BỘ =================
+local twoTimeDaggerBtn = nil
+local twoTimeCooldownLabel = nil
+local twoTimeBehindDistance = 2.5
+local twoTimeAimRefCount = 0
+
+-- ================= REMOTE =================
+local twoTimeRemoteEvent = ReplicatedStorage:FindFirstChild("Modules")
+    and ReplicatedStorage.Modules:FindFirstChild("Network")
+    and ReplicatedStorage.Modules.Network:FindFirstChild("RemoteEvent")
+
+-- ================= HÀM CLICK GUI =================
+local function clickButton(btn)
+    if not btn then return end
+    local success = pcall(function()
+        local connections = getconnections(btn.MouseButton1Click)
+        if connections then
+            for _, conn in ipairs(connections) do
+                pcall(function() conn:Fire() end)
+            end
+            return true
+        end
+    end)
+    if success then return end
+    pcall(function() firesignal(btn.MouseButton1Click) end)
+    pcall(function() firesignal(btn.MouseButton1Down) end)
+    pcall(function() firesignal(btn.MouseButton1Up) end)
+    pcall(function() firesignal(btn.Activated) end)
+    pcall(function() btn:Activate() end)
+end
+
+-- ================= HÀM DASH =================
+local function twoTimeDash()
+    if not S.DashEnabled then return end
+    local char = playerCharacter
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+
+    local dashDirection = hrp.CFrame.LookVector
+    local dashTime = 0.3
+    local startTime = tick()
+
+    local conn
+    conn = RunService.Heartbeat:Connect(function()
+        if tick() - startTime >= dashTime then
+            conn:Disconnect()
+            hrp.Velocity = Vector3.zero
+            return
+        end
+        hrp.Velocity = dashDirection * S.DashSpeed
+    end)
+end
+
+-- ================= KIỂM TRA SAU LƯNG =================
+local function isBehindKiller(killerHRP, playerHRP)
+    if not killerHRP or not playerHRP then return false end
+    local killerLook = killerHRP.CFrame.LookVector
+    local toPlayer = (playerHRP.Position - killerHRP.Position).Unit
+    local dot = killerLook:Dot(toPlayer)
+    return dot < -0.5
+end
+
+-- ================= HÀM HỖ TRỢ =================
+local function twoTimeFireDagger()
+    local activated = false
+
+    -- Cách 1: Click GUI
+    local mainUI = PlayerGui:FindFirstChild("MainUI")
+    local container = mainUI and mainUI:FindFirstChild("AbilityContainer")
+    if container then
+        local daggerBtn = container:FindFirstChild("Dagger")
+        if daggerBtn then
+            local charges = daggerBtn:FindFirstChild("Charges")
+            if charges and charges.Text == "0" then return end
+            clickButton(daggerBtn)
+            activated = true
+        end
+    end
+
+    -- Cách 2: Remote
+    if not activated then
+        if twoTimeRemoteEvent then
+            twoTimeRemoteEvent:FireServer("UseActorAbility", { buffer.fromstring("\"Dagger\"") })
+            activated = true
+        end
+    end
+
+    if activated then
+        twoTimeDash()
+    end
+end
+
+local function twoTimeRefreshUI()
+    local mainUi = PlayerGui:FindFirstChild("MainUI")
+    if not mainUi then return false end
+    local container = mainUi:FindFirstChild("AbilityContainer")
+    if not container then return false end
+
+    twoTimeDaggerBtn = container:FindFirstChild("Dagger")
+    if not twoTimeDaggerBtn then
+        for _, child in ipairs(container:GetChildren()) do
+            if child:IsA("ImageButton") or child:IsA("TextButton") then
+                twoTimeDaggerBtn = child
+                break
+            end
+        end
+    end
+
+    if twoTimeDaggerBtn then
+        twoTimeCooldownLabel = twoTimeDaggerBtn:FindFirstChild("CooldownTime")
+        return true
+    end
+    twoTimeDaggerBtn, twoTimeCooldownLabel = nil, nil
+    return false
+end
+
+-- Aim: LookVector mode
+local function twoTimeAimLookVector(khrp, hrp)
+    local humanoid = playerCharacter and playerCharacter:FindFirstChildOfClass("Humanoid")
+    if not humanoid then return end
+
+    twoTimeAimRefCount += 1
+    if twoTimeAimRefCount == 1 then humanoid.AutoRotate = false end
+
+    hrp.CFrame = CFrame.lookAt(hrp.Position, hrp.Position + khrp.CFrame.LookVector)
+
+    local start = tick()
+    local conn
+    conn = RunService.RenderStepped:Connect(function()
+        if tick() - start >= 0.6 then
+            conn:Disconnect()
+            twoTimeAimRefCount = math.max(0, twoTimeAimRefCount - 1)
+            if twoTimeAimRefCount == 0 then humanoid.AutoRotate = true end
+            return
+        end
+        local look = khrp.CFrame.LookVector
+        hrp.CFrame = CFrame.lookAt(hrp.Position, hrp.Position + look)
+    end)
+end
+
+-- Aim: TPBack mode
+local function twoTimeAimTPBack(killer, khrp, hrp)
+    local humanoid = playerCharacter and playerCharacter:FindFirstChildOfClass("Humanoid")
+    if not humanoid then return end
+
+    twoTimeAimRefCount += 1
+    if twoTimeAimRefCount == 1 then humanoid.AutoRotate = false end
+
+    local behindPos = khrp.Position - khrp.CFrame.LookVector * twoTimeBehindDistance
+    behindPos = Vector3.new(behindPos.X, khrp.Position.Y, behindPos.Z)
+    hrp.CFrame = CFrame.lookAt(behindPos, khrp.Position)
+
+    local start = tick()
+    local conn
+    conn = RunService.RenderStepped:Connect(function()
+        if tick() - start >= 0.6 then
+            conn:Disconnect()
+            twoTimeAimRefCount = math.max(0, twoTimeAimRefCount - 1)
+            if twoTimeAimRefCount == 0 then humanoid.AutoRotate = true end
+            return
+        end
+        local look = khrp.CFrame.LookVector
+        hrp.CFrame = CFrame.lookAt(hrp.Position, hrp.Position + look)
+    end)
+end
+
+local function twoTimeApplyAim(killer, khrp, hrp)
+    if S.AimDaggerMode == "LookVector" then
+        twoTimeAimLookVector(khrp, hrp)
+    elseif S.AimDaggerMode == "TPBack" then
+        twoTimeAimTPBack(killer, khrp, hrp)
+    end
+end
+
+-- ================= MAIN LOGIC =================
+local function twoTimeAttemptDagger()
+    if not S.AutoDaggerEnabled then return end
+
+    if not twoTimeDaggerBtn or not twoTimeCooldownLabel then
+        twoTimeRefreshUI()
+    end
+
+    if twoTimeCooldownLabel and twoTimeCooldownLabel.Text ~= "" then return end
+
+    local char = playerCharacter
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+
+    for _, killer in ipairs(killersFolder:GetChildren()) do
+        if not killer:IsA("Model") then continue end
+        local humanoid = killer:FindFirstChild("Humanoid")
+        local khrp = killer:FindFirstChild("HumanoidRootPart")
+        if humanoid and khrp and humanoid.Health > 0 and (hrp.Position - khrp.Position).Magnitude <= S.DaggerRadius then
+            if not isBehindKiller(khrp, hrp) then continue end
+
+            if S.AimDaggerEnabled then
+                twoTimeApplyAim(killer, khrp, hrp)
+            end
+            twoTimeFireDagger()
+            break
+        end
+    end
+end
+
+-- ================= UI MONITOR =================
+twoTimeRefreshUI()
+PlayerGui.ChildAdded:Connect(function(child)
+    if child.Name == "MainUI" then
+        task.delay(0.02, twoTimeRefreshUI)
+    end
+end)
+
+Players.LocalPlayer.CharacterAdded:Connect(function()
+    twoTimeAimRefCount = 0
+    task.delay(0.5, twoTimeRefreshUI)
+end)
+
+RunService.Heartbeat:Connect(twoTimeAttemptDagger)
+
+-- ================= API CHO UI =================
+getgenv().TwoTimeDaggerAPI = {
+    SetAutoDagger = function(val) S.AutoDaggerEnabled = val end,
+    SetAimDagger = function(val) S.AimDaggerEnabled = val end,
+    SetAimMode = function(val) S.AimDaggerMode = val end,
+    SetRadius = function(val) S.DaggerRadius = tonumber(val) or 4 end,
+    SetDash = function(val) S.DashEnabled = val end,
+    SetDashSpeed = function(val) S.DashSpeed = tonumber(val) or 50 end,
+}
