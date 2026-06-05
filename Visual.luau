@@ -2074,3 +2074,171 @@ getgenv().TwoTimeDaggerAPI = {
     SetDash = function(val) D.DashEnabled = val end,
     SetDashSpeed = function(val) D.DashSpeed = tonumber(val) or 50 end,
 }
+
+-- Auto Slash Shedletsky
+
+-- Khởi tạo getgenv nếu chưa có
+if not getgenv().ShedletskySettings then
+    getgenv().ShedletskySettings = {
+        AutoSlashEnabled = false,
+        SlashRadius = 10,
+        SetSlashTime = 1,
+        AutoChickenEnabled = false,
+        ChickenHPThreshold = 40,
+        ChickenDistance = 100,
+    }
+end
+
+local S = getgenv().ShedletskySettings
+
+-- ================= BIẾN NỘI BỘ =================
+local shedKillerDetectionTimes = {}
+local shedLastSlashTime = 0
+local shedSlashCooldown = 0.7
+
+-- ================= REMOTE =================
+local shedRemoteEvent = ReplicatedStorage:FindFirstChild("Modules")
+    and ReplicatedStorage.Modules:FindFirstChild("Network")
+    and ReplicatedStorage.Modules.Network:FindFirstChild("RemoteEvent")
+
+-- ================= HÀM CLICK GUI =================
+local function clickButton(btn)
+    if not btn then return end
+    local success = pcall(function()
+        local connections = getconnections(btn.MouseButton1Click)
+        if connections then
+            for _, conn in ipairs(connections) do
+                pcall(function() conn:Fire() end)
+            end
+            return true
+        end
+    end)
+    if success then return end
+    pcall(function() firesignal(btn.MouseButton1Click) end)
+    pcall(function() firesignal(btn.MouseButton1Down) end)
+    pcall(function() firesignal(btn.MouseButton1Up) end)
+    pcall(function() firesignal(btn.Activated) end)
+    pcall(function() btn:Activate() end)
+end
+
+-- ================= HÀM KÍCH HOẠT SKILL =================
+local function shedActivateSkill(skillName)
+    local mainUI = PlayerGui:FindFirstChild("MainUI")
+    local container = mainUI and mainUI:FindFirstChild("AbilityContainer")
+    if container then
+        local btn = container:FindFirstChild(skillName)
+        if btn then
+            local charges = btn:FindFirstChild("Charges")
+            if charges and charges.Text == "0" then return false end
+            clickButton(btn)
+            return true
+        end
+    end
+
+    if shedRemoteEvent then
+        shedRemoteEvent:FireServer("UseActorAbility", { buffer.fromstring("\"" .. skillName .. "\"") })
+        return true
+    end
+    return false
+end
+
+local function shedFireSlash()
+    shedActivateSkill("Slash")
+end
+
+local function shedFireChicken()
+    shedActivateSkill("FriedChicken")
+end
+
+-- ================= HÀM KIỂM TRA =================
+local function shedIsInRange(hrp, targetHrp, range)
+    if not hrp or not targetHrp then return false end
+    return (hrp.Position - targetHrp.Position).Magnitude <= range
+end
+
+local function shedGetCurrentHP()
+    local char = playerCharacter
+    if not char then return nil end
+    local humanoid = char:FindFirstChildOfClass("Humanoid")
+    if not humanoid then return nil end
+    return humanoid.Health
+end
+
+-- ================= MAIN LOGIC =================
+RunService.Heartbeat:Connect(function()
+    -- AUTO CHICKEN
+    if S.AutoChickenEnabled then
+        local hp = shedGetCurrentHP()
+        if hp and hp <= S.ChickenHPThreshold then
+            local char = playerCharacter
+            local hrp = char and char:FindFirstChild("HumanoidRootPart")
+            if hrp then
+                local allSafe = true
+                for _, killer in ipairs(killersFolder:GetChildren()) do
+                    if killer:IsA("Model") then
+                        local hum = killer:FindFirstChild("Humanoid")
+                        local khrp = killer:FindFirstChild("HumanoidRootPart")
+                        if hum and khrp and hum.Health > 0 then
+                            local dist = (hrp.Position - khrp.Position).Magnitude
+                            if dist < S.ChickenDistance then
+                                allSafe = false
+                                break
+                            end
+                        end
+                    end
+                end
+                if allSafe then
+                    shedFireChicken()
+                end
+            end
+        end
+    end
+
+    -- AUTO SLASH
+    if not S.AutoSlashEnabled then
+        shedKillerDetectionTimes = {}
+        return
+    end
+
+    local now = tick()
+    if now < shedLastSlashTime + shedSlashCooldown then return end
+
+    local char = playerCharacter
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+
+    for _, killer in ipairs(killersFolder:GetChildren()) do
+        if not killer:IsA("Model") then continue end
+        local humanoid = killer:FindFirstChild("Humanoid")
+        local khrp = killer:FindFirstChild("HumanoidRootPart")
+        if humanoid and khrp and humanoid.Health > 0 and shedIsInRange(hrp, khrp, S.SlashRadius) then
+            local killerName = killer.Name
+            local firstSeen = shedKillerDetectionTimes[killerName] or now
+            if now >= firstSeen + S.SetSlashTime then
+                shedFireSlash()
+                shedLastSlashTime = now
+                shedKillerDetectionTimes[killerName] = now
+                break
+            else
+                shedKillerDetectionTimes[killerName] = firstSeen
+            end
+        else
+            shedKillerDetectionTimes[killer.Name] = nil
+        end
+    end
+end)
+
+-- ================= CHARACTER RESPAWN =================
+Players.LocalPlayer.CharacterAdded:Connect(function()
+    shedKillerDetectionTimes = {}
+end)
+
+-- ================= API CHO UI =================
+getgenv().ShedletskyAPI = {
+    SetAutoSlash = function(val) S.AutoSlashEnabled = val end,
+    SetSlashRadius = function(val) S.SlashRadius = tonumber(val) or 10 end,
+    SetSlashTime = function(val) S.SetSlashTime = tonumber(val) or 1 end,
+    SetAutoChicken = function(val) S.AutoChickenEnabled = val end,
+    SetChickenHP = function(val) S.ChickenHPThreshold = tonumber(val) or 40 end,
+    SetChickenDistance = function(val) S.ChickenDistance = tonumber(val) or 100 end,
+}
