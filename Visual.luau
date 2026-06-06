@@ -2504,31 +2504,20 @@ if not getgenv().EliotSettings then
         AimOffset = 2,
         AutoEatPizzaEnabled = false,
         EatPizzaHPThreshold = 30,
+        AimDuration = 0.8,  -- Thời gian aim mỗi lần dùng skill
     }
 end
 
 local S = getgenv().EliotSettings
 
--- Biến nội bộ Aimbot
+-- Biến nội bộ
 local currentTarget = nil
 local isLockedOn = false
-local wasPlayingAnimation = false
+local aimStartTime = 0
 local autoRotateDisabledByScript = false
-local pizzaAnimations = {
-    ["114155003741146"] = true,
-    ["104033348426533"] = true,
-}
 local eliotModels = { ["Elliot"] = true }
 
--- Biến nội bộ Eat Pizza
-local eatPizzaActive = false
-
--- Remote event (nếu cần gửi cập nhật vị trí)
-local remoteEvent = ReplicatedStorage:FindFirstChild("Modules")
-    and ReplicatedStorage.Modules:FindFirstChild("Network")
-    and ReplicatedStorage.Modules.Network:FindFirstChild("RemoteEvent")
-
--- ================= HÀM HỖ TRỢ CHUNG =================
+-- ================= HÀM HỖ TRỢ =================
 local function isEliot()
     local char = playerCharacter
     return char and eliotModels[char.Name] or false
@@ -2550,21 +2539,38 @@ local function restoreAutoRotate()
     end
 end
 
--- ================= PIZZA AIMBOT =================
-local function isPlayingDangerousAnimation()
-    local hum = getHumanoid()
-    if not hum then return false end
-    local animator = hum:FindFirstChildWhichIsA("Animator")
-    if not animator then return false end
-    for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
-        local animId = track.Animation and tostring(track.Animation.AnimationId):match("%d+")
-        if animId and pizzaAnimations[animId] then
-            return true
+-- ================= KIỂM TRA COOLDOWN =================
+local function isPizzaOnCooldown()
+    local mainUI = PlayerGui:FindFirstChild("MainUI")
+    local container = mainUI and mainUI:FindFirstChild("AbilityContainer")
+    if not container then return false end
+
+    local pizzaBtn = container:FindFirstChild("Pizza")
+    if not pizzaBtn then
+        for _, child in ipairs(container:GetChildren()) do
+            if (child:IsA("TextButton") or child:IsA("ImageButton")) and string.lower(child.Name):find("pizza") then
+                pizzaBtn = child
+                break
+            end
         end
     end
+    if not pizzaBtn then return false end
+
+    local cooldownLabel = pizzaBtn:FindFirstChild("CooldownTime") or pizzaBtn:FindFirstChild("Cooldown")
+    if cooldownLabel and cooldownLabel:IsA("TextLabel") and cooldownLabel.Text ~= "" then
+        return true
+    end
+
+    local charges = pizzaBtn:FindFirstChild("Charges")
+    if charges and charges:IsA("TextLabel") then
+        local text = charges.Text
+        if text ~= "1" and text ~= "" then return true end
+    end
+
     return false
 end
 
+-- ================= PIZZA AIMBOT =================
 local function getWeakestSurvivor()
     if not survivorsFolder then return nil end
     local myChar = playerCharacter
@@ -2591,7 +2597,6 @@ local function getWeakestSurvivor()
     if #list == 0 then return nil end
     table.sort(list, function(a, b) return a.hp < b.hp end)
 
-    -- Nếu mình yếu nhất, chọn kẻ yếu thứ hai (nếu có), nếu không lấy chính kẻ yếu nhất
     if myHpPercent <= list[1].hp and #list > 1 then
         return list[2].model
     else
@@ -2601,7 +2606,6 @@ end
 
 -- ================= AUTO EAT PIZZA =================
 local function findMap()
-    -- Thử tìm map trong Workspace
     local mapContainer = Workspace:FindFirstChild("Map")
     if mapContainer then
         local ingame = mapContainer:FindFirstChild("Ingame")
@@ -2610,7 +2614,6 @@ local function findMap()
             if map then return map end
         end
     end
-    -- Fallback: tìm trực tiếp "Map" trong Workspace
     return Workspace:FindFirstChild("Map")
 end
 
@@ -2647,39 +2650,24 @@ local function tryEatPizza()
     local oldCF = hrp.CFrame
     hrp.CFrame = pizzaCF * CFrame.new(0, 1, 0)
 
-    -- Gửi remote update vị trí (nếu có remoteEvent và cần)
-    if remoteEvent then
-        pcall(function()
-            remoteEvent:FireServer("UnreliableRemoteEvent", "UpdCF")
-        end)
-    end
-
     task.delay(0.2, function()
         pcall(function()
             hrp.CFrame = oldCF
-            task.wait(0.3)
-            -- Gửi tín hiệu kết thúc (nếu cần)
-            if remoteEvent then
-                pcall(function()
-                    remoteEvent:FireServer("UnreliableRemoteEvent", "UpdCF")
-                end)
-            end
         end)
     end)
 end
 
 -- ================= MAIN LOOPS =================
--- Aimbot loop
 RunService.RenderStepped:Connect(function()
     if not S.PizzaAimbotEnabled then
         restoreAutoRotate()
-        currentTarget, isLockedOn, wasPlayingAnimation = nil, false, false
+        currentTarget, isLockedOn = nil, false
         return
     end
 
     if not isEliot() then
         restoreAutoRotate()
-        currentTarget, isLockedOn, wasPlayingAnimation = nil, false, false
+        currentTarget, isLockedOn = nil, false
         return
     end
 
@@ -2687,48 +2675,63 @@ RunService.RenderStepped:Connect(function()
     local root = getHRP()
     if not hum or not root then return end
 
-    local playing = isPlayingDangerousAnimation()
+    local cooldownActive = isPizzaOnCooldown()
 
-    -- Bắt đầu lock khi animation bắt đầu
-    if playing and not isLockedOn then
+    -- Bắt đầu lock khi cooldown vừa xuất hiện
+    if cooldownActive and not isLockedOn then
         currentTarget = getWeakestSurvivor()
-        if currentTarget then isLockedOn = true end
+        if currentTarget then
+            isLockedOn = true
+            aimStartTime = tick()
+        end
     end
 
-    -- Kiểm tra target còn sống không
-    if isLockedOn and currentTarget then
-        local tHum = currentTarget:FindFirstChildOfClass("Humanoid")
-        local tRoot = currentTarget:FindFirstChild("HumanoidRootPart")
-        if not (tHum and tRoot and tHum.Health > 0) then
+    -- Khi cooldown kết thúc, unlock
+    if not cooldownActive then
+        if isLockedOn then
             currentTarget, isLockedOn = nil, false
+            restoreAutoRotate()
         end
     end
 
-    -- Khi animation kết thúc, unlock
-    if (not playing) and wasPlayingAnimation then
-        currentTarget, isLockedOn = nil, false
-        restoreAutoRotate()
-    end
-    wasPlayingAnimation = playing
+    -- Thực hiện aim trong 0.8s
+    if isLockedOn and currentTarget then
+        local elapsed = tick() - aimStartTime
+        if elapsed > S.AimDuration then
+            -- Hết 0.8s, dừng aim
+            isLockedOn = false
+            currentTarget = nil
+            restoreAutoRotate()
+            return
+        end
 
-    -- Thực hiện aim khi đang lock
-    if playing and isLockedOn and currentTarget then
         local tRoot = currentTarget:FindFirstChild("HumanoidRootPart")
-        if tRoot then
-            if not autoRotateDisabledByScript then
-                hum.AutoRotate = false
-                autoRotateDisabledByScript = true
-            end
-
-            -- Tính vị trí aim có offset sang phải
-            local offsetPos = tRoot.Position + root.CFrame.RightVector * S.AimOffset
-            local targetPos = Vector3.new(offsetPos.X, root.Position.Y, offsetPos.Z)
-            root.CFrame = CFrame.lookAt(root.Position, targetPos)
+        if not tRoot then
+            currentTarget, isLockedOn = nil, false
+            restoreAutoRotate()
+            return
         end
+
+        -- Kiểm tra target còn sống
+        local tHum = currentTarget:FindFirstChildOfClass("Humanoid")
+        if not tHum or tHum.Health <= 0 then
+            currentTarget, isLockedOn = nil, false
+            restoreAutoRotate()
+            return
+        end
+
+        if not autoRotateDisabledByScript then
+            hum.AutoRotate = false
+            autoRotateDisabledByScript = true
+        end
+
+        local offsetPos = tRoot.Position + root.CFrame.RightVector * S.AimOffset
+        local targetPos = Vector3.new(offsetPos.X, root.Position.Y, offsetPos.Z)
+        root.CFrame = CFrame.lookAt(root.Position, targetPos)
     end
 end)
 
--- Auto Eat Pizza loop (chạy mỗi 0.9s như script gốc)
+-- Auto Eat Pizza loop
 task.spawn(function()
     while task.wait(0.9) do
         if S.AutoEatPizzaEnabled and isEliot() then
@@ -2740,7 +2743,7 @@ end)
 -- Khi chết/reset
 Players.LocalPlayer.CharacterAdded:Connect(function()
     autoRotateDisabledByScript = false
-    currentTarget, isLockedOn, wasPlayingAnimation = nil, false, false
+    currentTarget, isLockedOn = nil, false
 end)
 
 -- ================= API CHO UI =================
@@ -2750,4 +2753,5 @@ getgenv().EliotAPI = {
     SetAimOffset = function(v) S.AimOffset = tonumber(v) or 2 end,
     SetAutoEatPizza = function(v) S.AutoEatPizzaEnabled = v end,
     SetHPThreshold = function(v) S.EatPizzaHPThreshold = tonumber(v) or 30 end,
+    SetAimDuration = function(v) S.AimDuration = tonumber(v) or 0.8 end,
 }
