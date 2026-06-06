@@ -2513,6 +2513,7 @@ local S = getgenv().EliotSettings
 -- Biến nội bộ
 local currentTarget = nil
 local isLockedOn = false
+local aimCompleted = false  -- Đánh dấu đã aim xong trong lần cooldown này
 local aimStartTime = 0
 local autoRotateDisabledByScript = false
 local eliotModels = { ["Elliot"] = true }
@@ -2539,7 +2540,7 @@ local function restoreAutoRotate()
     end
 end
 
--- ================= KIỂM TRA COOLDOWN (ĐÃ SỬA) =================
+-- ================= KIỂM TRA COOLDOWN =================
 local function isPizzaOnCooldown()
     local mainUI = PlayerGui:FindFirstChild("MainUI")
     local container = mainUI and mainUI:FindFirstChild("AbilityContainer")
@@ -2559,13 +2560,13 @@ local function isPizzaOnCooldown()
     -- CHỈ kiểm tra CooldownTime hoặc Cooldown (label hiện số đếm ngược)
     local cooldownLabel = pizzaBtn:FindFirstChild("CooldownTime") or pizzaBtn:FindFirstChild("Cooldown")
     if cooldownLabel and cooldownLabel:IsA("TextLabel") then
-        local text = cooldownLabel.Text:gsub("%s+", "")  -- Xóa khoảng trắng
+        local text = cooldownLabel.Text:gsub("%s+", "")
         if text ~= "" then
-            return true  -- Đang có số đếm ngược → skill đang cooldown
+            return true
         end
     end
 
-    return false  -- Không có số đếm ngược → skill sẵn sàng
+    return false
 end
 
 -- ================= PIZZA AIMBOT =================
@@ -2659,13 +2660,13 @@ end
 RunService.RenderStepped:Connect(function()
     if not S.PizzaAimbotEnabled then
         restoreAutoRotate()
-        currentTarget, isLockedOn = nil, false
+        currentTarget, isLockedOn, aimCompleted = nil, false, false
         return
     end
 
     if not isEliot() then
         restoreAutoRotate()
-        currentTarget, isLockedOn = nil, false
+        currentTarget, isLockedOn, aimCompleted = nil, false, false
         return
     end
 
@@ -2675,8 +2676,17 @@ RunService.RenderStepped:Connect(function()
 
     local cooldownActive = isPizzaOnCooldown()
 
-    -- Bắt đầu lock khi cooldown vừa xuất hiện
-    if cooldownActive and not isLockedOn then
+    -- Khi cooldown kết thúc, reset mọi thứ
+    if not cooldownActive then
+        if isLockedOn or aimCompleted then
+            currentTarget, isLockedOn, aimCompleted = nil, false, false
+            restoreAutoRotate()
+        end
+        return
+    end
+
+    -- Bắt đầu lock khi cooldown vừa xuất hiện và chưa aim xong
+    if cooldownActive and not isLockedOn and not aimCompleted then
         currentTarget = getWeakestSurvivor()
         if currentTarget then
             isLockedOn = true
@@ -2684,20 +2694,13 @@ RunService.RenderStepped:Connect(function()
         end
     end
 
-    -- Khi cooldown kết thúc, unlock
-    if not cooldownActive then
-        if isLockedOn then
-            currentTarget, isLockedOn = nil, false
-            restoreAutoRotate()
-        end
-    end
-
-    -- Thực hiện aim trong AimDuration
+    -- Thực hiện aim nếu đang lock
     if isLockedOn and currentTarget then
         local elapsed = tick() - aimStartTime
         if elapsed > S.AimDuration then
+            -- Hết thời gian aim, đánh dấu đã aim xong
             isLockedOn = false
-            currentTarget = nil
+            aimCompleted = true
             restoreAutoRotate()
             return
         end
@@ -2739,7 +2742,7 @@ end)
 -- Khi chết/reset
 Players.LocalPlayer.CharacterAdded:Connect(function()
     autoRotateDisabledByScript = false
-    currentTarget, isLockedOn = nil, false
+    currentTarget, isLockedOn, aimCompleted = nil, false, false
 end)
 
 -- ================= API CHO UI =================
