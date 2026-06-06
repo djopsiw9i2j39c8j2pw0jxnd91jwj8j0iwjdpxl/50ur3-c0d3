@@ -2504,7 +2504,7 @@ if not getgenv().EliotSettings then
         AimOffset = 2,
         AutoEatPizzaEnabled = false,
         EatPizzaHPThreshold = 30,
-        AimDuration = 0.8,  -- Thời gian aim mỗi lần dùng skill
+        AimDuration = 0.8,
     }
 end
 
@@ -2539,7 +2539,7 @@ local function restoreAutoRotate()
     end
 end
 
--- ================= KIỂM TRA COOLDOWN =================
+-- ================= KIỂM TRA COOLDOWN (ĐÃ SỬA) =================
 local function isPizzaOnCooldown()
     local mainUI = PlayerGui:FindFirstChild("MainUI")
     local container = mainUI and mainUI:FindFirstChild("AbilityContainer")
@@ -2556,18 +2556,16 @@ local function isPizzaOnCooldown()
     end
     if not pizzaBtn then return false end
 
+    -- CHỈ kiểm tra CooldownTime hoặc Cooldown (label hiện số đếm ngược)
     local cooldownLabel = pizzaBtn:FindFirstChild("CooldownTime") or pizzaBtn:FindFirstChild("Cooldown")
-    if cooldownLabel and cooldownLabel:IsA("TextLabel") and cooldownLabel.Text ~= "" then
-        return true
+    if cooldownLabel and cooldownLabel:IsA("TextLabel") then
+        local text = cooldownLabel.Text:gsub("%s+", "")  -- Xóa khoảng trắng
+        if text ~= "" then
+            return true  -- Đang có số đếm ngược → skill đang cooldown
+        end
     end
 
-    local charges = pizzaBtn:FindFirstChild("Charges")
-    if charges and charges:IsA("TextLabel") then
-        local text = charges.Text
-        if text ~= "1" and text ~= "" then return true end
-    end
-
-    return false
+    return false  -- Không có số đếm ngược → skill sẵn sàng
 end
 
 -- ================= PIZZA AIMBOT =================
@@ -2694,11 +2692,10 @@ RunService.RenderStepped:Connect(function()
         end
     end
 
-    -- Thực hiện aim trong 0.8s
+    -- Thực hiện aim trong AimDuration
     if isLockedOn and currentTarget then
         local elapsed = tick() - aimStartTime
         if elapsed > S.AimDuration then
-            -- Hết 0.8s, dừng aim
             isLockedOn = false
             currentTarget = nil
             restoreAutoRotate()
@@ -2712,7 +2709,6 @@ RunService.RenderStepped:Connect(function()
             return
         end
 
-        -- Kiểm tra target còn sống
         local tHum = currentTarget:FindFirstChildOfClass("Humanoid")
         if not tHum or tHum.Health <= 0 then
             currentTarget, isLockedOn = nil, false
