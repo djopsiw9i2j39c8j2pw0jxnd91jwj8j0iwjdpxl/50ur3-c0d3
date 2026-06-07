@@ -2992,3 +2992,152 @@ getgenv().KillerCamlockAPI = {
         S.AimPart = part
     end
 }
+
+-- 007n7
+
+local INVIS_ANIM_ID = "rbxassetid://115509603980568"
+local CLONE_DURATION = 5
+
+if not getgenv().InvisSettings then
+    getgenv().InvisSettings = {
+        InstantEnabled = false,
+        CloneEnabled = false,
+        AnimTrack = nil,
+        IsPlaying = false,
+        CloneActive = false,
+        WasOnCooldown = false,
+        IsValidRole = false
+    }
+end
+
+local Settings = getgenv().InvisSettings
+
+local function getAnimator()
+    if not playerCharacter then return nil end
+    local hum = playerCharacter:FindFirstChildOfClass("Humanoid")
+    if not hum then return nil end
+    return hum:FindFirstChildOfClass("Animator")
+end
+
+local function getCloneButton()
+    local playerGui = localPlayer:FindFirstChild("PlayerGui")
+    if not playerGui then return nil end
+    local mainUI = playerGui:FindFirstChild("MainUI")
+    if not mainUI then return nil end
+    local abilityContainer = mainUI:FindFirstChild("AbilityContainer")
+    if not abilityContainer then return nil end
+    return abilityContainer:FindFirstChild("Clone")
+end
+
+local function getCooldownText()
+    local button = getCloneButton()
+    if not button then return nil end
+    if button:IsA("TextButton") then return button.Text end
+    local label = button:FindFirstChildWhichIsA("TextLabel", true)
+    if label then return label.Text end
+    return nil
+end
+
+local function isCooldownActive()
+    local text = getCooldownText()
+    return text and text ~= "" and tonumber(text) ~= nil
+end
+
+local function stopAnimation()
+    if not Settings.AnimTrack then return end
+    Settings.AnimTrack:Stop(0.1)
+    Settings.AnimTrack = nil
+    Settings.IsPlaying = false
+end
+
+local function playAnimation()
+    if Settings.IsPlaying then return end
+    local animator = getAnimator()
+    if not animator then return end
+    local anim = Instance.new("Animation")
+    anim.AnimationId = INVIS_ANIM_ID
+    local track = animator:LoadAnimation(anim)
+    track.Priority = Enum.AnimationPriority.Action4
+    track:Play(0.1)
+    track:AdjustSpeed(0)
+    Settings.AnimTrack = track
+    Settings.IsPlaying = true
+end
+
+local function updateAnimation()
+    local shouldPlay = (Settings.InstantEnabled or Settings.CloneActive) and Settings.IsValidRole
+    if shouldPlay then
+        playAnimation()
+    else
+        stopAnimation()
+    end
+end
+
+local function deactivateClone()
+    Settings.CloneActive = false
+    updateAnimation()
+end
+
+local function activateClone()
+    if Settings.CloneActive then return end
+    Settings.CloneActive = true
+    updateAnimation()
+    task.delay(CLONE_DURATION, deactivateClone)
+end
+
+local function updateCloneDetection()
+    local onCooldown = isCooldownActive()
+    if onCooldown and not Settings.WasOnCooldown then
+        activateClone()
+    end
+    Settings.WasOnCooldown = onCooldown
+end
+
+local function checkValidRole()
+    if not playerCharacter or not playerCharacter.Parent then return false end
+    return playerCharacter:IsDescendantOf(survivorsFolder) or playerCharacter:IsDescendantOf(killersFolder)
+end
+
+local function handleRoleTransition(currentlyValid)
+    if currentlyValid and not Settings.IsValidRole then
+        Settings.IsValidRole = true
+        updateAnimation()
+    elseif not currentlyValid and Settings.IsValidRole then
+        Settings.IsValidRole = false
+        Settings.CloneActive = false
+        Settings.WasOnCooldown = false
+        stopAnimation()
+    end
+end
+
+local function ProcessInvisLoop()
+    local currentlyValid = checkValidRole()
+    handleRoleTransition(currentlyValid)
+    if currentlyValid and Settings.CloneEnabled then
+        updateCloneDetection()
+    end
+end
+
+local InvisLastTick = tick()
+RunService.Heartbeat:Connect(function()
+    if tick() - InvisLastTick >= 0.2 then
+        InvisLastTick = tick()
+        ProcessInvisLoop()
+    end
+end)
+
+-- API cho UI
+getgenv().InvisAPI = {
+    SetInstant = function(val)
+        Settings.InstantEnabled = val
+        updateAnimation()
+    end,
+    SetClone = function(val)
+        Settings.CloneEnabled = val
+        if not val then
+            Settings.CloneActive = false
+            Settings.WasOnCooldown = false
+        end
+        updateAnimation()
+    end
+}
