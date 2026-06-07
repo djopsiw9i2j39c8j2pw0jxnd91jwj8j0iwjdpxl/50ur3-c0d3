@@ -2762,6 +2762,7 @@ if not getgenv().KillerCamlockSettings then
         Enabled = false,
         Target = nil,
         ZoomDistance = 10,
+        AimPart = "Head",               -- Mặc định aim vào đầu
         OriginalCameraSubject = nil,   
         CustomCameraCFrame = nil,      
         Connections = {},
@@ -2772,6 +2773,32 @@ end
 
 local S = getgenv().KillerCamlockSettings
 local CAMLOCK_RENDER_KEY = "KillerCamlock_SyncRender_MaxPriority"
+
+-- ================= HÀM LẤY BỘ PHẬN AIM =================
+local function getAimPartPosition(model, aimPartName)
+    if not model then return nil end
+    local partMap = {
+        ["Head"] = "Head",
+        ["Torso"] = "UpperTorso",
+        ["Left Arm"] = "LeftHand",
+        ["Right Arm"] = "RightHand",
+        ["Left Leg"] = "LeftFoot",
+        ["Right Leg"] = "RightFoot"
+    }
+    local partName = partMap[aimPartName] or "Head"
+    local part = model:FindFirstChild(partName)
+    if part and part:IsA("BasePart") then
+        return part.Position
+    end
+    -- Fallback: tìm theo tên gốc
+    part = model:FindFirstChild(aimPartName)
+    if part and part:IsA("BasePart") then
+        return part.Position
+    end
+    -- Fallback cuối: HumanoidRootPart
+    local hrp = model:FindFirstChild("HumanoidRootPart")
+    return hrp and hrp.Position
+end
 
 -- ================= HÀM HỖ TRỢ =================
 local function isKiller()
@@ -2803,8 +2830,9 @@ local function enable()
     if not isKiller() then return end
     if S.OriginalCameraSubject then return end 
 
-    S.Target = getNearestSurvivor()
-    if not S.Target then return end
+    local targetHRP = getNearestSurvivor()
+    if not targetHRP then return end
+    S.Target = targetHRP  -- vẫn lưu HRP để tiện kiểm tra tồn tại
 
     local cam = workspace.CurrentCamera
     if not cam then return end
@@ -2817,46 +2845,41 @@ local function enable()
         cam.CameraSubject = hum
     end
 
-    -- Khởi tạo Cam Ảo
     S.CustomCameraCFrame = cam.CFrame 
 
-    -- Tăng ưu tiên lên +50 để ép game phải nhường quyền điều khiển camera
     RunService:BindToRenderStep(CAMLOCK_RENDER_KEY, Enum.RenderPriority.Camera.Value + 50, function()
         if not S.Enabled or not isKiller() then
             disable()
             return
         end
 
+        -- Kiểm tra target còn sống và cập nhật
         if not (S.Target and S.Target.Parent and S.Target.Parent:FindFirstChild("Humanoid") and S.Target.Parent.Humanoid.Health > 0) then
-            S.Target = getNearestSurvivor()
-            if not S.Target then return end
+            local newHRP = getNearestSurvivor()
+            if newHRP then
+                S.Target = newHRP
+            else
+                return
+            end
         end
 
         local myRoot = playerCharacter and playerCharacter:FindFirstChild("HumanoidRootPart")
         if not myRoot then return end
 
-        -- 1. Xác định HƯỚNG NHÌN chuẩn (từ Killer cắm thẳng vào Survivor)
-        local targetDir = (S.Target.Position - myRoot.Position).Unit
-        
-        -- 2. Lấy HƯỚNG NHÌN hiện tại của Cam Ảo
+        -- Lấy vị trí bộ phận aim
+        local aimPos = getAimPartPosition(S.Target.Parent, S.AimPart) or S.Target.Position
+
+        local targetDir = (aimPos - myRoot.Position).Unit
         local currentDir = S.CustomCameraCFrame.LookVector
-        
-        -- 3. CHỈ LERP HƯỚNG NHÌN: Khóa mượt góc xoay để không bị cứng đơ (0.2 là độ nhạy)
         local smoothDir = currentDir:Lerp(targetDir, 0.2).Unit
         
-        -- 4. NEO CHẶT VỊ TRÍ: Khóa vị trí neo vào sát nhân vật, KHÔNG LERP để chống delay/tách xa
         local anchorPos = myRoot.Position + Vector3.new(0, 3, 0)
-        
-        -- 5. Tính toán Vị Trí Cam: Nằm sau anchorPos một khoảng ZoomDistance
         local camPos = anchorPos - smoothDir * S.ZoomDistance
-        
-        -- 6. Áp dụng CFrame cho Cam Ảo
         S.CustomCameraCFrame = CFrame.lookAt(camPos, camPos + smoothDir)
 
-        -- 7. ÉP CAM GỐC THEO CAM ẢO VÀ CHỐNG GAME CAN THIỆP
-        cam.CameraType = Enum.CameraType.Custom -- Ép liên tục phòng trường hợp game có script lén đổi
+        cam.CameraType = Enum.CameraType.Custom
         cam.CFrame = S.CustomCameraCFrame
-        cam.Focus = CFrame.new(S.Target.Position)
+        cam.Focus = CFrame.new(aimPos)  -- focus vào đúng bộ phận
     end)
 
     -- Zoom chuột (PC)
@@ -2964,5 +2987,8 @@ getgenv().KillerCamlockAPI = {
         if not S.Enabled then return end
         local new = getNearestSurvivor()
         if new then S.Target = new end
+    end,
+    SetAimPart = function(part)
+        S.AimPart = part
     end
 }
