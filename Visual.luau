@@ -2754,3 +2754,215 @@ getgenv().EliotAPI = {
     SetHPThreshold = function(v) S.EatPizzaHPThreshold = tonumber(v) or 30 end,
     SetAimDuration = function(v) S.AimDuration = tonumber(v) or 0.8 end,
 }
+
+-- Camlock Bypass Pro
+
+if not getgenv().KillerCamlockSettings then
+    getgenv().KillerCamlockSettings = {
+        Enabled = false,
+        Target = nil,
+        ZoomDistance = 10,
+        OriginalCameraSubject = nil,   
+        CustomCameraCFrame = nil,      
+        Connections = {},
+        PinchTouches = {},
+        LastPinchDistance = nil
+    }
+end
+
+local S = getgenv().KillerCamlockSettings
+local CAMLOCK_RENDER_KEY = "KillerCamlock_SyncRender_MaxPriority"
+
+-- ================= HÀM HỖ TRỢ =================
+local function isKiller()
+    if not playerCharacter or not killersFolder then return false end
+    return playerCharacter:IsDescendantOf(killersFolder)
+end
+
+local function getNearestSurvivor()
+    if not survivorsFolder then return nil end
+    local myRoot = playerCharacter and playerCharacter:FindFirstChild("HumanoidRootPart")
+    if not myRoot then return nil end
+
+    local nearest, minDist = nil, math.huge
+    for _, s in ipairs(survivorsFolder:GetChildren()) do
+        if s:IsA("Model") then
+            local h = s:FindFirstChild("Humanoid")
+            local r = s:FindFirstChild("HumanoidRootPart")
+            if h and r and h.Health > 0 then
+                local d = (r.Position - myRoot.Position).Magnitude
+                if d < minDist then minDist = d; nearest = r end
+            end
+        end
+    end
+    return nearest
+end
+
+-- ================= BẬT CAMLOCK =================
+local function enable()
+    if not isKiller() then return end
+    if S.OriginalCameraSubject then return end 
+
+    S.Target = getNearestSurvivor()
+    if not S.Target then return end
+
+    local cam = workspace.CurrentCamera
+    if not cam then return end
+
+    S.OriginalCameraSubject = cam.CameraSubject
+    cam.CameraType = Enum.CameraType.Custom
+
+    local hum = playerCharacter and playerCharacter:FindFirstChildOfClass("Humanoid")
+    if hum then
+        cam.CameraSubject = hum
+    end
+
+    -- Khởi tạo Cam Ảo
+    S.CustomCameraCFrame = cam.CFrame 
+
+    -- Tăng ưu tiên lên +50 để ép game phải nhường quyền điều khiển camera
+    RunService:BindToRenderStep(CAMLOCK_RENDER_KEY, Enum.RenderPriority.Camera.Value + 50, function()
+        if not S.Enabled or not isKiller() then
+            disable()
+            return
+        end
+
+        if not (S.Target and S.Target.Parent and S.Target.Parent:FindFirstChild("Humanoid") and S.Target.Parent.Humanoid.Health > 0) then
+            S.Target = getNearestSurvivor()
+            if not S.Target then return end
+        end
+
+        local myRoot = playerCharacter and playerCharacter:FindFirstChild("HumanoidRootPart")
+        if not myRoot then return end
+
+        -- 1. Xác định HƯỚNG NHÌN chuẩn (từ Killer cắm thẳng vào Survivor)
+        local targetDir = (S.Target.Position - myRoot.Position).Unit
+        
+        -- 2. Lấy HƯỚNG NHÌN hiện tại của Cam Ảo
+        local currentDir = S.CustomCameraCFrame.LookVector
+        
+        -- 3. CHỈ LERP HƯỚNG NHÌN: Khóa mượt góc xoay để không bị cứng đơ (0.2 là độ nhạy)
+        local smoothDir = currentDir:Lerp(targetDir, 0.2).Unit
+        
+        -- 4. NEO CHẶT VỊ TRÍ: Khóa vị trí neo vào sát nhân vật, KHÔNG LERP để chống delay/tách xa
+        local anchorPos = myRoot.Position + Vector3.new(0, 3, 0)
+        
+        -- 5. Tính toán Vị Trí Cam: Nằm sau anchorPos một khoảng ZoomDistance
+        local camPos = anchorPos - smoothDir * S.ZoomDistance
+        
+        -- 6. Áp dụng CFrame cho Cam Ảo
+        S.CustomCameraCFrame = CFrame.lookAt(camPos, camPos + smoothDir)
+
+        -- 7. ÉP CAM GỐC THEO CAM ẢO VÀ CHỐNG GAME CAN THIỆP
+        cam.CameraType = Enum.CameraType.Custom -- Ép liên tục phòng trường hợp game có script lén đổi
+        cam.CFrame = S.CustomCameraCFrame
+        cam.Focus = CFrame.new(S.Target.Position)
+    end)
+
+    -- Zoom chuột (PC)
+    local mouseConn = UserInputService.InputChanged:Connect(function(input)
+        if not S.Enabled then return end
+        if input.UserInputType == Enum.UserInputType.MouseWheel then
+            S.ZoomDistance = math.clamp(S.ZoomDistance - input.Position.Z * 2.0, 2, 30)
+        end
+    end)
+    table.insert(S.Connections, mouseConn)
+
+    -- Zoom pinch (Mobile)
+    S.PinchTouches = {}
+    S.LastPinchDistance = nil
+
+    local touchStartConn = UserInputService.TouchStarted:Connect(function(touch, gameProcessed)
+        if not S.Enabled then return end
+        if gameProcessed then return end
+        table.insert(S.PinchTouches, touch)
+        if #S.PinchTouches == 2 then
+            local pos1 = Vector2.new(S.PinchTouches[1].Position.X, S.PinchTouches[1].Position.Y)
+            local pos2 = Vector2.new(S.PinchTouches[2].Position.X, S.PinchTouches[2].Position.Y)
+            S.LastPinchDistance = (pos1 - pos2).Magnitude
+        end
+    end)
+    table.insert(S.Connections, touchStartConn)
+
+    local touchMoveConn = UserInputService.TouchMoved:Connect(function(touch, gameProcessed)
+        if not S.Enabled then return end
+        if gameProcessed then return end
+        for i, t in ipairs(S.PinchTouches) do
+            if t == touch then
+                S.PinchTouches[i] = touch
+                break
+            end
+        end
+        if #S.PinchTouches == 2 and S.LastPinchDistance then
+            local pos1 = Vector2.new(S.PinchTouches[1].Position.X, S.PinchTouches[1].Position.Y)
+            local pos2 = Vector2.new(S.PinchTouches[2].Position.X, S.PinchTouches[2].Position.Y)
+            local newDist = (pos1 - pos2).Magnitude
+            local delta = newDist - S.LastPinchDistance
+            S.ZoomDistance = math.clamp(S.ZoomDistance - delta / 20, 2, 30)
+            S.LastPinchDistance = newDist
+        end
+    end)
+    table.insert(S.Connections, touchMoveConn)
+
+    local touchEndConn = UserInputService.TouchEnded:Connect(function(touch, gameProcessed)
+        if not S.Enabled then return end
+        for i, t in ipairs(S.PinchTouches) do
+            if t == touch then
+                table.remove(S.PinchTouches, i)
+                break
+            end
+        end
+        if #S.PinchTouches < 2 then
+            S.LastPinchDistance = nil
+        end
+    end)
+    table.insert(S.Connections, touchEndConn)
+end
+
+-- ================= TẮT CAMLOCK =================
+local function disable()
+    RunService:UnbindFromRenderStep(CAMLOCK_RENDER_KEY)
+
+    for _, conn in ipairs(S.Connections) do
+        if conn and conn.Connected then conn:Disconnect() end
+    end
+    S.Connections = {}
+    S.PinchTouches = {}
+    S.LastPinchDistance = nil
+
+    local cam = workspace.CurrentCamera
+    if cam then
+        if S.OriginalCameraSubject then
+            cam.CameraSubject = S.OriginalCameraSubject
+            S.OriginalCameraSubject = nil
+        end
+    end
+
+    S.Target = nil
+    S.CustomCameraCFrame = nil 
+end
+
+-- ================= CHARACTER RESET =================
+Players.LocalPlayer.CharacterAdded:Connect(function()
+    if S.Enabled then
+        disable()
+        S.Enabled = false
+    end
+end)
+
+-- ================= API CHO UI =================
+getgenv().KillerCamlockAPI = {
+    Toggle = function(state)
+        S.Enabled = state
+        if state then
+            enable()
+        else
+            disable()
+        end
+    end,
+    SwitchTarget = function()
+        if not S.Enabled then return end
+        local new = getNearestSurvivor()
+        if new then S.Target = new end
+    end
+}
