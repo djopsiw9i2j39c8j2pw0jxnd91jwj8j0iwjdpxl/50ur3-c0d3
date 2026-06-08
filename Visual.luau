@@ -2156,8 +2156,8 @@ local function shedIsInRange(hrp, targetHrp, range)
     return (hrp.Position - targetHrp.Position).Magnitude <= range
 end
 
-local function shedGetCurrentHP()
-    local char = playerCharacter
+-- Truyền thẳng character vào để tối ưu
+local function shedGetCurrentHP(char)
     if not char then return nil end
     local humanoid = char:FindFirstChildOfClass("Humanoid")
     if not humanoid then return nil end
@@ -2166,12 +2166,19 @@ end
 
 -- ================= MAIN LOGIC =================
 RunService.Heartbeat:Connect(function()
+    local char = playerCharacter
+    
+    -- ĐÃ THÊM: Chỉ chạy logic khi nhân vật tồn tại và đang nằm trong thư mục Survivors
+    if not (char and char:IsDescendantOf(survivorsFolder)) then
+        shedKillerDetectionTimes = {} -- Xóa dữ liệu cũ để tránh lỗi khi đổi phe
+        return
+    end
+
     -- AUTO CHICKEN
     if S.AutoChickenEnabled then
-        local hp = shedGetCurrentHP()
+        local hp = shedGetCurrentHP(char)
         if hp and hp <= S.ChickenHPThreshold then
-            local char = playerCharacter
-            local hrp = char and char:FindFirstChild("HumanoidRootPart")
+            local hrp = char:FindFirstChild("HumanoidRootPart")
             if hrp then
                 local allSafe = true
                 for _, killer in ipairs(killersFolder:GetChildren()) do
@@ -2203,8 +2210,7 @@ RunService.Heartbeat:Connect(function()
     local now = tick()
     if now < shedLastSlashTime + shedSlashCooldown then return end
 
-    local char = playerCharacter
-    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    local hrp = char:FindFirstChild("HumanoidRootPart")
     if not hrp then return end
 
     for _, killer in ipairs(killersFolder:GetChildren()) do
