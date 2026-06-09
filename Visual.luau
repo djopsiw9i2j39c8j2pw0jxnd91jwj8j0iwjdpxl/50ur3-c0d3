@@ -761,79 +761,12 @@ end)
 
 -- auto block
 
--- ==================== KIỂM TRA ĐIỀU KIỆN ====================
-_G._AutoBlockEnabled = false
+-- ==================== KHỞI TẠO CẤU HÌNH QUA getgenv() ====================
+-- Cho phép tách UI (nút) và logic (script này) thành 2 phần độc lập
+-- Nếu biến chưa có trong getgenv(), gán giá trị mặc định
 
-local function isAllowed()
-    if not survivorsFolder then return false end
-    local char = playerCharacter or localPlayer.Character
-    if not char then return false end
-    -- Kiểm tra có trong survivorsFolder không
-    local isSurvivor = survivorsFolder:FindFirstChild(char.Name) ~= nil
-    if not isSurvivor then return false end
-    -- Kiểm tra tên chính xác
-    if char.Name ~= "Guest1337" then return false end
-    return true
-end
-
-local function disableAll()
-    if not _G._AutoBlockEnabled then return end
-    _G._AutoBlockEnabled = false
-    -- Xóa circle
-    if CirclePart then CirclePart:Destroy() CirclePart = nil end
-    if HitCirclePart then HitCirclePart:Destroy() HitCirclePart = nil end
-    -- Dừng pro loop
-    if proHeartbeatConn then
-        proHeartbeatConn:Disconnect()
-        proHeartbeatConn = nil
-    end
-    -- Xóa active attackers (không cần reset toàn bộ, nhưng nên dọn)
-    for player, data in pairs(activeAttackers) do
-        for _, conn in pairs(data.endedConns) do
-            conn:Disconnect()
-        end
-    end
-    activeAttackers = {}
-end
-
-local function enableScript()
-    if _G._AutoBlockEnabled then return end
-    _G._AutoBlockEnabled = true
-    -- activeAttackers có thể còn cũ, reset
-    for player, data in pairs(activeAttackers) do
-        for _, conn in pairs(data.endedConns) do
-            conn:Disconnect()
-        end
-    end
-    activeAttackers = {}
-    -- Khởi tạo lại listener cho các killer hiện có
-    for _, player in ipairs(Players:GetPlayers()) do
-        if player ~= localPlayer and isKiller(player) and player.Character then
-            setupSoundListener(player.Character, player)
-        end
-    end
-end
-
-local function checkAndApply()
-    if isAllowed() then
-        enableScript()
-    else
-        disableAll()
-    end
-end
-
--- Lắng nghe khi nhân vật thay đổi (respawn)
-localPlayer.CharacterAdded:Connect(function(character)
-    playerCharacter = character
-    task.wait(0.1)
-    checkAndApply()
-end)
-
--- Kiểm tra lần đầu
-checkAndApply()
-
--- ==================== PHẦN CODE GỐC (GIỮ NGUYÊN NHƯNG ĐÃ THÊM KIỂM TRA _G._AutoBlockEnabled) ====================
 local defaults = {
+    -- Sound list
     soundIds = {
         ["112809109188560"] = true,
         ["127793641088496"] = true,
@@ -854,23 +787,34 @@ local defaults = {
         ["108610718831698"] = true,
         ["108907358619313"] = true
     },
-    BlockMode = "Default",
+
+    -- Chế độ & tính năng
+    BlockMode = "Default",  -- "Default" hoặc "Pro"
     AutoBlock = false,
     ShowCircle = false,
     UseHitCircle = false,
     WallCheck = false,
     StubCheckEnabled = false,
+
+    -- Thông số
     RangeCheck = 25,
     StubCheck = 6,
     HitRange = 10,
     ProBlockCooldown = 0.3,
-    ProSoundThreshold = 0.9
+    ProSoundThreshold = 0.9  -- bỏ qua sound đã chạy quá 90%
 }
 
+-- Đồng bộ với getgenv(), chỉ gán nếu chưa tồn tại
 for k, v in pairs(defaults) do
     if getgenv()[k] == nil then
         getgenv()[k] = v
     end
+end
+
+-- ==================== HÀM KIỂM TRA ĐIỀU KIỆN GUEST1337 ====================
+local function isGuest1337()
+    -- Chỉ cho phép hoạt động nếu nhân vật (Character) có tên là "Guest1337"
+    return playerCharacter and playerCharacter.Name == "Guest1337"
 end
 
 local function GetRootPart()
@@ -903,7 +847,6 @@ local function FireButton(btn)
 end
 
 local function fastBlock()
-    if not _G._AutoBlockEnabled then return end
     local mainUI = PlayerGui:FindFirstChild("MainUI")
     local container = mainUI and mainUI:FindFirstChild("AbilityContainer")
     if not container then return end
@@ -960,7 +903,13 @@ end
 local CirclePart, HitCirclePart
 
 local function UpdateCircle()
-    if not _G._AutoBlockEnabled then return end
+    -- Nếu không phải Guest1337, dọn dẹp các vòng tròn đang hiển thị và dừng lại
+    if not isGuest1337() then
+        if CirclePart then CirclePart:Destroy(); CirclePart = nil end
+        if HitCirclePart then HitCirclePart:Destroy(); HitCirclePart = nil end
+        return
+    end
+
     local hrp = GetRootPart()
     if not hrp then return end
     local killer, kcf = GetMainKiller()
@@ -996,7 +945,7 @@ local function UpdateCircle()
     end
 end
 
--- XỬ LÝ SOUND
+-- ==================== XỬ LÝ SOUND ====================
 local function getSoundId(sound)
     if not sound or not sound.SoundId then return nil end
     return tostring(sound.SoundId):match("%d+")
@@ -1020,7 +969,8 @@ local function removeActiveSound(player, sound)
 end
 
 local function onSoundStarted(player, sound, char, soundId)
-    if not _G._AutoBlockEnabled then return end
+    -- Chốt chặn: Không phải Guest1337 thì làm ngơ luôn
+    if not isGuest1337() then return end
     if not getgenv().AutoBlock then return end
     if not soundId or not getgenv().soundIds[soundId] then return end
     if not isKiller(player) then return end
@@ -1049,6 +999,7 @@ local function onSoundStarted(player, sound, char, soundId)
 
         fastBlock()
     else
+        -- Pro mode: lưu trạng thái đang tấn công
         if not activeAttackers[player] then
             local root = char:FindFirstChild("HumanoidRootPart")
             if not root then return end
@@ -1077,12 +1028,13 @@ local function onSoundStarted(player, sound, char, soundId)
     end
 end
 
--- KIỂM TRA PRO MODE
+-- ==================== KIỂM TRA PRO MODE ====================
 local lastProBlockTime = 0
 local proHeartbeatConn = nil
 
 local function checkProBlock()
-    if not _G._AutoBlockEnabled then return end
+    -- Chốt chặn: Không phải Guest1337 thì hủy kiểm tra
+    if not isGuest1337() then return end
     if not getgenv().AutoBlock then return end
     if getgenv().BlockMode ~= "Pro" then return end
 
@@ -1097,7 +1049,7 @@ local function checkProBlock()
         if not root or not root.Parent then
             for _, conn in pairs(data.endedConns) do conn:Disconnect() end
             activeAttackers[player] = nil
-            goto continue
+            continue
         end
 
         local anyValidSound = false
@@ -1122,17 +1074,15 @@ local function checkProBlock()
         if not anyValidSound then
             for _, conn in pairs(data.endedConns) do conn:Disconnect() end
             activeAttackers[player] = nil
-            goto continue
+            continue
         end
 
-        if getgenv().StubCheckEnabled and math.abs(root.Position.Y - myRoot.Position.Y) > getgenv().StubCheck then
-            goto continue
-        end
+        if getgenv().StubCheckEnabled and math.abs(root.Position.Y - myRoot.Position.Y) > getgenv().StubCheck then continue end
 
         local inRange = false
         if getgenv().UseHitCircle then
             local killer, kcf = GetMainKiller()
-            if not killer or not kcf then goto continue end
+            if not killer or not kcf then continue end
             local baseOffset = Vector3.new(0, -3, 0)
             local forward = kcf.LookVector
             local pos = kcf.Position + forward * (getgenv().HitRange * 0.8) + baseOffset
@@ -1141,14 +1091,12 @@ local function checkProBlock()
             inRange = (myRoot.Position - root.Position).Magnitude <= getgenv().RangeCheck
         end
 
-        if not inRange then goto continue end
-        if CheckWall(myRoot.Position, root.Position) then goto continue end
+        if not inRange then continue end
+        if CheckWall(myRoot.Position, root.Position) then continue end
 
         lastProBlockTime = now
         fastBlock()
         break
-
-        ::continue::
     end
 end
 
@@ -1164,7 +1112,7 @@ local function stopProLoop()
     end
 end
 
--- QUẢN LÝ PLAYER
+-- ==================== QUẢN LÝ PLAYER ====================
 local function setupSoundListener(char, player)
     if not isKiller(player) then return end
 
@@ -1215,6 +1163,7 @@ local function setupSoundListener(char, player)
 end
 
 local playerConns = {}
+
 local function monitorCharacter(player, char)
     if not char then return end
     if isKiller(player) then
@@ -1241,21 +1190,27 @@ Players.PlayerAdded:Connect(onPlayerAdded)
 
 localPlayer.CharacterAdded:Connect(function(char)
     playerCharacter = char
-    -- checkAndApply đã được gọi riêng, ở đây không cần gọi lại để tránh trùng
 end)
 
--- Vòng lặp chính (chạy liên tục, nhưng các hàm bên trong đã có kiểm tra _G._AutoBlockEnabled)
 spawn(function()
     while true do
-        UpdateCircle()
-        if _G._AutoBlockEnabled and getgenv().AutoBlock and getgenv().BlockMode == "Pro" then
-            startProLoop()
+        -- Nếu là Guest1337 thì cho phép vòng lặp hoạt động
+        if isGuest1337() then
+            UpdateCircle()
+            if getgenv().AutoBlock and getgenv().BlockMode == "Pro" then
+                startProLoop()
+            else
+                stopProLoop()
+            end
         else
+            -- Nếu đổi tên hoặc mất quyền Guest1337, dọn dẹp hiển thị và dừng ProLoop
+            UpdateCircle() 
             stopProLoop()
         end
         task.wait(0.02)
     end
 end)
+
 
 -- Auto Punch Logic
 
