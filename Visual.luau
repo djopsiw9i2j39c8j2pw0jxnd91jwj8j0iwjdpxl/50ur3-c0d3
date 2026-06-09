@@ -2123,8 +2123,11 @@ end
 
 -- ================= HÀM KÍCH HOẠT SKILL =================
 local function shedActivateSkill(skillName)
-    local mainUI = PlayerGui:FindFirstChild("MainUI")
+    -- Đã fix: Trỏ rõ ràng đến PlayerGui của localPlayer
+    local PlayerGui = localPlayer:FindFirstChild("PlayerGui")
+    local mainUI = PlayerGui and PlayerGui:FindFirstChild("MainUI")
     local container = mainUI and mainUI:FindFirstChild("AbilityContainer")
+    
     if container then
         local btn = container:FindFirstChild(skillName)
         if btn then
@@ -2156,8 +2159,7 @@ local function shedIsInRange(hrp, targetHrp, range)
     return (hrp.Position - targetHrp.Position).Magnitude <= range
 end
 
-local function shedGetCurrentHP()
-    local char = playerCharacter
+local function shedGetCurrentHP(char)
     if not char then return nil end
     local humanoid = char:FindFirstChildOfClass("Humanoid")
     if not humanoid then return nil end
@@ -2166,12 +2168,19 @@ end
 
 -- ================= MAIN LOGIC =================
 RunService.Heartbeat:Connect(function()
+    local char = playerCharacter
+    
+    -- CHỐT CHẶN 100%: Chỉ hoạt động nếu nhân vật tồn tại VÀ đang nằm trong mục Survivors
+    if not (char and char:IsDescendantOf(survivorsFolder)) then
+        shedKillerDetectionTimes = {} -- Xóa lịch sử tracking để tránh lỗi kẹt thời gian
+        return
+    end
+
     -- AUTO CHICKEN
     if S.AutoChickenEnabled then
-        local hp = shedGetCurrentHP()
+        local hp = shedGetCurrentHP(char)
         if hp and hp <= S.ChickenHPThreshold then
-            local char = playerCharacter
-            local hrp = char and char:FindFirstChild("HumanoidRootPart")
+            local hrp = char:FindFirstChild("HumanoidRootPart")
             if hrp then
                 local allSafe = true
                 for _, killer in ipairs(killersFolder:GetChildren()) do
@@ -2203,8 +2212,7 @@ RunService.Heartbeat:Connect(function()
     local now = tick()
     if now < shedLastSlashTime + shedSlashCooldown then return end
 
-    local char = playerCharacter
-    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    local hrp = char:FindFirstChild("HumanoidRootPart")
     if not hrp then return end
 
     for _, killer in ipairs(killersFolder:GetChildren()) do
@@ -2229,7 +2237,7 @@ RunService.Heartbeat:Connect(function()
 end)
 
 -- ================= CHARACTER RESPAWN =================
-Players.LocalPlayer.CharacterAdded:Connect(function()
+localPlayer.CharacterAdded:Connect(function()
     shedKillerDetectionTimes = {}
 end)
 
