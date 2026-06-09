@@ -2156,8 +2156,8 @@ local function shedIsInRange(hrp, targetHrp, range)
     return (hrp.Position - targetHrp.Position).Magnitude <= range
 end
 
--- Truyền thẳng character vào để tối ưu
-local function shedGetCurrentHP(char)
+local function shedGetCurrentHP()
+    local char = playerCharacter
     if not char then return nil end
     local humanoid = char:FindFirstChildOfClass("Humanoid")
     if not humanoid then return nil end
@@ -2166,19 +2166,12 @@ end
 
 -- ================= MAIN LOGIC =================
 RunService.Heartbeat:Connect(function()
-    local char = playerCharacter
-    
-    -- ĐÃ THÊM: Chỉ chạy logic khi nhân vật tồn tại và đang nằm trong thư mục Survivors
-    if not (char and char:IsDescendantOf(survivorsFolder)) then
-        shedKillerDetectionTimes = {} -- Xóa dữ liệu cũ để tránh lỗi khi đổi phe
-        return
-    end
-
     -- AUTO CHICKEN
     if S.AutoChickenEnabled then
-        local hp = shedGetCurrentHP(char)
+        local hp = shedGetCurrentHP()
         if hp and hp <= S.ChickenHPThreshold then
-            local hrp = char:FindFirstChild("HumanoidRootPart")
+            local char = playerCharacter
+            local hrp = char and char:FindFirstChild("HumanoidRootPart")
             if hrp then
                 local allSafe = true
                 for _, killer in ipairs(killersFolder:GetChildren()) do
@@ -2210,7 +2203,8 @@ RunService.Heartbeat:Connect(function()
     local now = tick()
     if now < shedLastSlashTime + shedSlashCooldown then return end
 
-    local hrp = char:FindFirstChild("HumanoidRootPart")
+    local char = playerCharacter
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
     if not hrp then return end
 
     for _, killer in ipairs(killersFolder:GetChildren()) do
@@ -3372,9 +3366,11 @@ local function ForsakenReachLogic()
 
     local ping = getSafePing()
     local targetPos = targetHRP.Position + (targetHRP.Velocity * ping)
+    
+    -- ĐÃ FIX 1: Dùng Y của targetPos (Y của mục tiêu) thay vì oldCF.Position.Y
     local blinkPos = Vector3.new(
         targetPos.X + RNG:NextNumber(-1.1, 1.1),
-        oldCF.Position.Y,
+        targetPos.Y, 
         targetPos.Z + RNG:NextNumber(-1.1, 1.1)
     )
 
@@ -3384,7 +3380,9 @@ local function ForsakenReachLogic()
     end
 
     hrp.Velocity = Vector3.zero
-    hrp.CFrame = CFrame.new(blinkPos, blinkPos + oldCF.LookVector)
+    
+    -- ĐÃ FIX 2: Giữ nguyên góc xoay (Rotation) của nhân vật, chỉ update mỗi Position
+    hrp.CFrame = CFrame.new(blinkPos) * (oldCF - oldCF.Position)
 
     RunService.RenderStepped:Wait()
 
@@ -3409,3 +3407,4 @@ getgenv().HitboxDevilAPI = {
     SetEnabled = function(val) S.Enabled = val end,
     SetDistance = function(val) S.Distance = tonumber(val) or 120 end
 }
+
