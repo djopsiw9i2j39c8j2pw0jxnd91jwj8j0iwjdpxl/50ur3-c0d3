@@ -17,17 +17,21 @@ PhysicsService = game:GetService("PhysicsService")
 PathfindingService = game:GetService("PathfindingService")
 LocalizationService = game:GetService("LocalizationService")
 Debris = game:GetService("Debris")
+ServerScriptService = game:GetService("ServerScriptService")
 
 MapFolder = Workspace:WaitForChild("Map")
 IngameFolder = MapFolder:WaitForChild("Ingame")
 killersFolder = Workspace:WaitForChild("Players"):WaitForChild("Killers")
 survivorsFolder = Workspace:WaitForChild("Players"):WaitForChild("Survivors")
 localPlayer = Players.LocalPlayer
+PlayerGui = localPlayer:WaitForChild("PlayerGui", 10)
 playerCharacter = localPlayer.Character or localPlayer.CharacterAdded:Wait()
 
 localPlayer.CharacterAdded:Connect(function(character)
     playerCharacter = character
 end)
+
+Camera = Workspace.CurrentCamera
 
 if getgenv().HutaoESPSystem then
     local oldSys = getgenv().HutaoESPSystem
@@ -1876,94 +1880,29 @@ local twoTimeDaggerBtn = nil
 local twoTimeCooldownLabel = nil
 local twoTimeBehindDistance = 2.5
 local twoTimeAimRefCount = 0
+local isAiming = false 
+
+-- Biến phục vụ cơ chế "Bay vào range kịp trong 0.3s"
+local lastSkillTriggerTime = 0 
+local lastTargetKiller = nil
 
 -- ================= REMOTE =================
 local twoTimeRemoteEvent = ReplicatedStorage:FindFirstChild("Modules")
     and ReplicatedStorage.Modules:FindFirstChild("Network")
     and ReplicatedStorage.Modules.Network:FindFirstChild("RemoteEvent")
 
--- ================= HÀM CLICK GUI =================
-local function clickButton(btn)
-    if not btn then return end
-    local success = pcall(function()
-        local connections = getconnections(btn.MouseButton1Click)
-        if connections then
-            for _, conn in ipairs(connections) do
-                pcall(function() conn:Fire() end)
-            end
-            return true
-        end
-    end)
-    if success then return end
-    pcall(function() firesignal(btn.MouseButton1Click) end)
-    pcall(function() firesignal(btn.MouseButton1Down) end)
-    pcall(function() firesignal(btn.MouseButton1Up) end)
-    pcall(function() firesignal(btn.Activated) end)
-    pcall(function() btn:Activate() end)
+-- ================= HÀM KIỂM TRA NHÂN VẬT =================
+local function isTwoTimeCharacter()
+    return playerCharacter and playerCharacter.Name == "TwoTime"
 end
 
--- ================= HÀM DASH =================
-local function twoTimeDash()
-    if not D.DashEnabled then return end
-    local char = playerCharacter
-    local hrp = char and char:FindFirstChild("HumanoidRootPart")
-    if not hrp then return end
-
-    local dashDirection = hrp.CFrame.LookVector
-    local dashTime = 0.3
-    local startTime = tick()
-
-    local conn
-    conn = RunService.Heartbeat:Connect(function()
-        if tick() - startTime >= dashTime then
-            conn:Disconnect()
-            hrp.Velocity = Vector3.zero
-            return
-        end
-        hrp.Velocity = dashDirection * D.DashSpeed
-    end)
-end
-
--- ================= KIỂM TRA SAU LƯNG =================
-local function isBehindKiller(killerHRP, playerHRP)
-    if not killerHRP or not playerHRP then return false end
-    local killerLook = killerHRP.CFrame.LookVector
-    local toPlayer = (playerHRP.Position - killerHRP.Position).Unit
-    local dot = killerLook:Dot(toPlayer)
-    return dot < -0.5
-end
-
--- ================= HÀM HỖ TRỢ =================
-local function twoTimeFireDagger()
-    local activated = false
-
-    -- Cách 1: Click GUI
-    local mainUI = PlayerGui:FindFirstChild("MainUI")
-    local container = mainUI and mainUI:FindFirstChild("AbilityContainer")
-    if container then
-        local daggerBtn = container:FindFirstChild("Dagger")
-        if daggerBtn then
-            local charges = daggerBtn:FindFirstChild("Charges")
-            if charges and charges.Text == "0" then return end
-            clickButton(daggerBtn)
-            activated = true
-        end
-    end
-
-    -- Cách 2: Remote
-    if not activated then
-        if twoTimeRemoteEvent then
-            twoTimeRemoteEvent:FireServer("UseActorAbility", { buffer.fromstring("\"Dagger\"") })
-            activated = true
-        end
-    end
-
-    if activated then
-        twoTimeDash()
-    end
-end
-
+-- ================= HÀM REFRESH UI =================
 local function twoTimeRefreshUI()
+    if not isTwoTimeCharacter() then 
+        twoTimeDaggerBtn, twoTimeCooldownLabel = nil, nil
+        return false 
+    end
+    
     local mainUi = PlayerGui:FindFirstChild("MainUI")
     if not mainUi then return false end
     local container = mainUi:FindFirstChild("AbilityContainer")
@@ -1987,11 +1926,110 @@ local function twoTimeRefreshUI()
     return false
 end
 
+-- ================= HÀM CHECK SKILL SẴN SÀNG =================
+local function isSkillReady()
+    if not twoTimeDaggerBtn or not twoTimeCooldownLabel then
+        twoTimeRefreshUI()
+    end
+    if not twoTimeDaggerBtn or not twoTimeCooldownLabel then return false end
+    
+    -- Nếu đang trong cửa sổ 0.3 giây "vừa bấm chiêu và đang bay vào", vẫn cho phép chạy tiếp mạch Aim
+    if tick() - lastSkillTriggerTime <= 0.3 then 
+        return true 
+    end
+
+    -- Nếu ngoài 0.3 giây mà UI hiển thị thời gian hồi chiêu thì chặn lại để tránh lỗi xoay người bừa bãi
+    if twoTimeCooldownLabel.Text ~= "" then return false end
+    
+    local charges = twoTimeDaggerBtn:FindFirstChild("Charges")
+    if charges and charges.Text == "0" then return false end
+
+    return true
+end
+
+-- ================= HÀM CLICK GUI =================
+local function clickButton(btn)
+    if not btn then return end
+    local success = pcall(function()
+        local connections = getconnections(btn.MouseButton1Click)
+        if connections then
+            for _, conn in ipairs(connections) do
+                pcall(function() conn:Fire() end)
+            end
+            return true
+        end
+    end)
+    if success then return end
+    pcall(function() firesignal(btn.MouseButton1Click) end)
+    pcall(function() firesignal(btn.MouseButton1Down) end)
+    pcall(function() firesignal(btn.MouseButton1Up) end)
+    pcall(function() firesignal(btn.Activated) end)
+    pcall(function() btn:Activate() end)
+end
+
+-- ================= HÀM DASH =================
+local function twoTimeDash()
+    if not isTwoTimeCharacter() or not D.DashEnabled then return end
+    local char = playerCharacter
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+
+    local dashDirection = hrp.CFrame.LookVector
+    local dashTime = 0.3
+    local startTime = tick()
+
+    local conn
+    conn = RunService.Heartbeat:Connect(function()
+        if not isTwoTimeCharacter() or tick() - startTime >= dashTime then
+            conn:Disconnect()
+            if hrp and hrp.Parent then hrp.Velocity = Vector3.zero end
+            return
+        end
+        hrp.Velocity = dashDirection * D.DashSpeed
+    end)
+end
+
+-- ================= KIỂM TRA SAU LƯNG =================
+local function isBehindKiller(killerHRP, playerHRP)
+    if not killerHRP or not playerHRP then return false end
+    local killerLook = killerHRP.CFrame.LookVector
+    local toPlayer = (playerHRP.Position - killerHRP.Position).Unit
+    local dot = killerLook:Dot(toPlayer)
+    return dot < -0.5
+end
+
+-- ================= HÀM KÍCH HOẠT SKILL =================
+local function twoTimeFireDagger()
+    if not isTwoTimeCharacter() then return end
+    
+    -- Lưu mốc thời gian kích hoạt chiêu để mở cửa sổ 0.3s hỗ trợ bắt Aim tầm ngắn
+    lastSkillTriggerTime = tick() 
+    local activated = false
+
+    -- Cách 1: Click GUI
+    if twoTimeDaggerBtn then
+        clickButton(twoTimeDaggerBtn)
+        activated = true
+    end
+
+    -- Cách 2: Remote (Dự phòng)
+    if not activated and twoTimeRemoteEvent then
+        twoTimeRemoteEvent:FireServer("UseActorAbility", { buffer.fromstring("\"Dagger\"") })
+        activated = true
+    end
+
+    if activated then
+        twoTimeDash()
+    end
+end
+
 -- Aim: LookVector mode
 local function twoTimeAimLookVector(khrp, hrp)
+    if not isTwoTimeCharacter() then return end
     local humanoid = playerCharacter and playerCharacter:FindFirstChildOfClass("Humanoid")
     if not humanoid then return end
 
+    isAiming = true
     twoTimeAimRefCount += 1
     if twoTimeAimRefCount == 1 then humanoid.AutoRotate = false end
 
@@ -2000,10 +2038,14 @@ local function twoTimeAimLookVector(khrp, hrp)
     local start = tick()
     local conn
     conn = RunService.RenderStepped:Connect(function()
-        if tick() - start >= 0.6 then
+        -- Ngắt xoay ngay lập tức nếu hết 0.6s, đổi nhân vật, HOẶC chiêu đã dính Cooldown sâu (ngoài cửa sổ 0.3s)
+        if not isTwoTimeCharacter() or tick() - start >= 0.6 or (tick() - lastSkillTriggerTime > 0.3 and twoTimeCooldownLabel and twoTimeCooldownLabel.Text ~= "") then
             conn:Disconnect()
             twoTimeAimRefCount = math.max(0, twoTimeAimRefCount - 1)
-            if twoTimeAimRefCount == 0 then humanoid.AutoRotate = true end
+            if twoTimeAimRefCount == 0 and humanoid and humanoid.Parent then 
+                humanoid.AutoRotate = true 
+            end
+            isAiming = false
             return
         end
         local look = khrp.CFrame.LookVector
@@ -2013,9 +2055,11 @@ end
 
 -- Aim: TPBack mode
 local function twoTimeAimTPBack(killer, khrp, hrp)
+    if not isTwoTimeCharacter() then return end
     local humanoid = playerCharacter and playerCharacter:FindFirstChildOfClass("Humanoid")
     if not humanoid then return end
 
+    isAiming = true
     twoTimeAimRefCount += 1
     if twoTimeAimRefCount == 1 then humanoid.AutoRotate = false end
 
@@ -2026,10 +2070,14 @@ local function twoTimeAimTPBack(killer, khrp, hrp)
     local start = tick()
     local conn
     conn = RunService.RenderStepped:Connect(function()
-        if tick() - start >= 0.6 then
+        -- Áp dụng điều kiện tắt tương tự LookVector để chống lỗi tự xoay khi dính Cooldown
+        if not isTwoTimeCharacter() or tick() - start >= 0.6 or (tick() - lastSkillTriggerTime > 0.3 and twoTimeCooldownLabel and twoTimeCooldownLabel.Text ~= "") then
             conn:Disconnect()
             twoTimeAimRefCount = math.max(0, twoTimeAimRefCount - 1)
-            if twoTimeAimRefCount == 0 then humanoid.AutoRotate = true end
+            if twoTimeAimRefCount == 0 and humanoid and humanoid.Parent then 
+                humanoid.AutoRotate = true 
+            end
+            isAiming = false
             return
         end
         local look = khrp.CFrame.LookVector
@@ -2047,33 +2095,62 @@ end
 
 -- ================= MAIN LOGIC =================
 local function twoTimeAttemptDagger()
-    if not D.AutoDaggerEnabled then return end
-
-    if not twoTimeDaggerBtn or not twoTimeCooldownLabel then
-        twoTimeRefreshUI()
-    end
-
-    if twoTimeCooldownLabel and twoTimeCooldownLabel.Text ~= "" then return end
+    if not isTwoTimeCharacter() or not D.AutoDaggerEnabled then return end
+    
+    -- 1. Kiểm tra tính sẵn sàng của skill (Bao gồm bộ lọc đệm cửa sổ 0.3s)
+    if not isSkillReady() then return end
 
     local char = playerCharacter
     local hrp = char and char:FindFirstChild("HumanoidRootPart")
     if not hrp then return end
 
+    -- 2. Quét mục tiêu Killer xung quanh
     for _, killer in ipairs(killersFolder:GetChildren()) do
         if not killer:IsA("Model") then continue end
         local humanoid = killer:FindFirstChild("Humanoid")
         local khrp = killer:FindFirstChild("HumanoidRootPart")
-        if humanoid and khrp and humanoid.Health > 0 and (hrp.Position - khrp.Position).Magnitude <= D.DaggerRadius then
-            if not isBehindKiller(khrp, hrp) then continue end
-
-            if D.AimDaggerEnabled then
-                twoTimeApplyAim(killer, khrp, hrp)
+        
+        if humanoid and khrp and humanoid.Health > 0 then
+            local distance = (hrp.Position - khrp.Position).Magnitude
+            
+            -- ĐIỀU KIỆN KHỚP: Nằm trong Radius và đứng sau lưng Killer
+            if distance <= D.DaggerRadius and isBehindKiller(khrp, hrp) then
+                
+                -- Trường hợp đặc biệt: Chiêu vừa bấm ở ngoài range nhưng bay vào kịp trong tầm 0.3 giây
+                if tick() - lastSkillTriggerTime <= 0.3 and D.AimDaggerEnabled then
+                    if not isAiming or lastTargetKiller ~= killer then
+                        lastTargetKiller = killer
+                        twoTimeApplyAim(killer, khrp, hrp)
+                    end
+                    break 
+                end
+                
+                -- Trường hợp thông thường: Skill sẵn sàng hoàn toàn, tự xả chiêu + khóa Aim tự động
+                if not isAiming and tick() - lastSkillTriggerTime > 0.3 then
+                    if D.AimDaggerEnabled then
+                        lastTargetKiller = killer
+                        twoTimeApplyAim(killer, khrp, hrp)
+                    end
+                    twoTimeFireDagger()
+                    break
+                end
             end
-            twoTimeFireDagger()
-            break
         end
     end
 end
+
+-- ================= THEO DÕI CLICK THỦ CÔNG =================
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if not isTwoTimeCharacter() then return end
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        local mainUi = PlayerGui:FindFirstChild("MainUI")
+        local container = mainUi and mainUi:FindFirstChild("AbilityContainer")
+        local daggerBtn = container and container:FindFirstChild("Dagger")
+        if daggerBtn and twoTimeCooldownLabel and twoTimeCooldownLabel.Text == "" then
+            lastSkillTriggerTime = tick()
+        end
+    end
+end)
 
 -- ================= UI MONITOR =================
 twoTimeRefreshUI()
@@ -2083,8 +2160,11 @@ PlayerGui.ChildAdded:Connect(function(child)
     end
 end)
 
-Players.LocalPlayer.CharacterAdded:Connect(function()
+localPlayer.CharacterAdded:Connect(function()
     twoTimeAimRefCount = 0
+    isAiming = false
+    lastSkillTriggerTime = 0
+    lastTargetKiller = nil
     task.delay(0.5, twoTimeRefreshUI)
 end)
 
