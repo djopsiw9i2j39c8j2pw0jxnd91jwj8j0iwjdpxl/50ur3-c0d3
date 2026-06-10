@@ -1886,6 +1886,9 @@ local isAiming = false
 local lastSkillTriggerTime = 0 
 local lastTargetKiller = nil
 
+-- Biến quản lý dash trong aim
+local aimDashConnection = nil
+
 -- ================= REMOTE =================
 local twoTimeRemoteEvent = ReplicatedStorage:FindFirstChild("Modules")
     and ReplicatedStorage.Modules:FindFirstChild("Network")
@@ -1967,11 +1970,10 @@ local function clickButton(btn)
     pcall(function() btn:Activate() end)
 end
 
--- ================= HÀM DASH =================
+-- ================= HÀM DASH THÔNG THƯỜNG (Khi bắn chiêu) =================
 local function twoTimeDash()
     if not isTwoTimeCharacter() or not D.DashEnabled then return end
-    local char = playerCharacter
-    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    local hrp = playerCharacter and playerCharacter:FindFirstChild("HumanoidRootPart")
     if not hrp then return end
 
     local dashDirection = hrp.CFrame.LookVector
@@ -1998,36 +2000,90 @@ local function isBehindKiller(killerHRP, playerHRP)
     return dot < -0.5
 end
 
+-- ================= HÀM DASH RA SAU LƯNG KILLER (Dùng trong Aim) =================
+local function startAimDash(killerHRP, playerHRP)
+    -- Ngắt dash cũ nếu có
+    if aimDashConnection then
+        aimDashConnection:Disconnect()
+        aimDashConnection = nil
+    end
+
+    if not D.DashEnabled then return end
+    if not killerHRP or not playerHRP then return end
+
+    -- Tính vị trí sau lưng killer
+    local behindPos = killerHRP.Position - killerHRP.CFrame.LookVector * twoTimeBehindDistance
+    behindPos = Vector3.new(behindPos.X, killerHRP.Position.Y, behindPos.Z)
+    local direction = (behindPos - playerHRP.Position).Unit
+    if direction.Magnitude == 0 then return end
+
+    local dashSpeed = D.DashSpeed
+    local startTime = tick()
+    local dashDuration = 0.4 -- kéo dài hơn một chút để đảm bảo tới nơi
+
+    aimDashConnection = RunService.Heartbeat:Connect(function()
+        if not isTwoTimeCharacter() then
+            aimDashConnection:Disconnect()
+            aimDashConnection = nil
+            return
+        end
+
+        local hrp = playerCharacter and playerCharacter:FindFirstChild("HumanoidRootPart")
+        if not hrp or not hrp.Parent then
+            aimDashConnection:Disconnect()
+            aimDashConnection = nil
+            return
+        end
+
+        -- Dừng dash nếu đã tới gần hoặc quá thời gian
+        local currentDistance = (behindPos - hrp.Position).Magnitude
+        if currentDistance < 0.5 or tick() - startTime > dashDuration then
+            hrp.Velocity = Vector3.zero
+            aimDashConnection:Disconnect()
+            aimDashConnection = nil
+            return
+        end
+
+        -- Liên tục cập nhật hướng (phòng killer di chuyển)
+        local newBehind = killerHRP.Position - killerHRP.CFrame.LookVector * twoTimeBehindDistance
+        newBehind = Vector3.new(newBehind.X, killerHRP.Position.Y, newBehind.Z)
+        local newDir = (newBehind - hrp.Position).Unit
+        if newDir.Magnitude > 0 then
+            hrp.Velocity = newDir * dashSpeed
+        end
+    end)
+end
+
 -- ================= HÀM KÍCH HOẠT SKILL =================
 local function twoTimeFireDagger()
     if not isTwoTimeCharacter() then return end
     
-    -- Lưu mốc thời gian kích hoạt chiêu để mở cửa sổ 0.3s hỗ trợ bắt Aim tầm ngắn
     lastSkillTriggerTime = tick() 
     local activated = false
 
-    -- Cách 1: Click GUI
     if twoTimeDaggerBtn then
         clickButton(twoTimeDaggerBtn)
         activated = true
     end
 
-    -- Cách 2: Remote (Dự phòng)
     if not activated and twoTimeRemoteEvent then
         twoTimeRemoteEvent:FireServer("UseActorAbility", { buffer.fromstring("\"Dagger\"") })
         activated = true
     end
 
     if activated then
-        twoTimeDash()
+        twoTimeDash() -- Dash gốc khi bắn chiêu (có thể bật/tắt riêng)
     end
 end
 
--- Aim: LookVector mode
+-- Aim: LookVector mode (Có dash ra sau lưng)
 local function twoTimeAimLookVector(khrp, hrp)
     if not isTwoTimeCharacter() then return end
     local humanoid = playerCharacter and playerCharacter:FindFirstChildOfClass("Humanoid")
     if not humanoid then return end
+
+    -- Bắt đầu dash ra sau lưng killer
+    startAimDash(khrp, hrp)
 
     isAiming = true
     twoTimeAimRefCount += 1
@@ -2038,7 +2094,6 @@ local function twoTimeAimLookVector(khrp, hrp)
     local start = tick()
     local conn
     conn = RunService.RenderStepped:Connect(function()
-        -- Ngắt xoay ngay lập tức nếu hết 0.6s, đổi nhân vật, HOẶC chiêu đã dính Cooldown sâu (ngoài cửa sổ 0.3s)
         if not isTwoTimeCharacter() or tick() - start >= 0.6 or (tick() - lastSkillTriggerTime > 0.3 and twoTimeCooldownLabel and twoTimeCooldownLabel.Text ~= "") then
             conn:Disconnect()
             twoTimeAimRefCount = math.max(0, twoTimeAimRefCount - 1)
@@ -2046,6 +2101,11 @@ local function twoTimeAimLookVector(khrp, hrp)
                 humanoid.AutoRotate = true 
             end
             isAiming = false
+            -- Dừng dash nếu đang chạy
+            if aimDashConnection then
+                aimDashConnection:Disconnect()
+                aimDashConnection = nil
+            end
             return
         end
         local look = khrp.CFrame.LookVector
@@ -2053,11 +2113,14 @@ local function twoTimeAimLookVector(khrp, hrp)
     end)
 end
 
--- Aim: TPBack mode
+-- Aim: TPBack mode (Có dash ra sau lưng)
 local function twoTimeAimTPBack(killer, khrp, hrp)
     if not isTwoTimeCharacter() then return end
     local humanoid = playerCharacter and playerCharacter:FindFirstChildOfClass("Humanoid")
     if not humanoid then return end
+
+    -- Bắt đầu dash ra sau lưng killer
+    startAimDash(khrp, hrp)
 
     isAiming = true
     twoTimeAimRefCount += 1
@@ -2070,7 +2133,6 @@ local function twoTimeAimTPBack(killer, khrp, hrp)
     local start = tick()
     local conn
     conn = RunService.RenderStepped:Connect(function()
-        -- Áp dụng điều kiện tắt tương tự LookVector để chống lỗi tự xoay khi dính Cooldown
         if not isTwoTimeCharacter() or tick() - start >= 0.6 or (tick() - lastSkillTriggerTime > 0.3 and twoTimeCooldownLabel and twoTimeCooldownLabel.Text ~= "") then
             conn:Disconnect()
             twoTimeAimRefCount = math.max(0, twoTimeAimRefCount - 1)
@@ -2078,6 +2140,10 @@ local function twoTimeAimTPBack(killer, khrp, hrp)
                 humanoid.AutoRotate = true 
             end
             isAiming = false
+            if aimDashConnection then
+                aimDashConnection:Disconnect()
+                aimDashConnection = nil
+            end
             return
         end
         local look = khrp.CFrame.LookVector
@@ -2097,14 +2163,12 @@ end
 local function twoTimeAttemptDagger()
     if not isTwoTimeCharacter() or not D.AutoDaggerEnabled then return end
     
-    -- 1. Kiểm tra tính sẵn sàng của skill (Bao gồm bộ lọc đệm cửa sổ 0.3s)
     if not isSkillReady() then return end
 
     local char = playerCharacter
     local hrp = char and char:FindFirstChild("HumanoidRootPart")
     if not hrp then return end
 
-    -- 2. Quét mục tiêu Killer xung quanh
     for _, killer in ipairs(killersFolder:GetChildren()) do
         if not killer:IsA("Model") then continue end
         local humanoid = killer:FindFirstChild("Humanoid")
@@ -2113,10 +2177,9 @@ local function twoTimeAttemptDagger()
         if humanoid and khrp and humanoid.Health > 0 then
             local distance = (hrp.Position - khrp.Position).Magnitude
             
-            -- ĐIỀU KIỆN KHỚP: Nằm trong Radius và đứng sau lưng Killer
             if distance <= D.DaggerRadius and isBehindKiller(khrp, hrp) then
                 
-                -- Trường hợp đặc biệt: Chiêu vừa bấm ở ngoài range nhưng bay vào kịp trong tầm 0.3 giây
+                -- Trường hợp bay vào range trong 0.3s
                 if tick() - lastSkillTriggerTime <= 0.3 and D.AimDaggerEnabled then
                     if not isAiming or lastTargetKiller ~= killer then
                         lastTargetKiller = killer
@@ -2125,7 +2188,7 @@ local function twoTimeAttemptDagger()
                     break 
                 end
                 
-                -- Trường hợp thông thường: Skill sẵn sàng hoàn toàn, tự xả chiêu + khóa Aim tự động
+                -- Trường hợp thường
                 if not isAiming and tick() - lastSkillTriggerTime > 0.3 then
                     if D.AimDaggerEnabled then
                         lastTargetKiller = killer
@@ -2165,6 +2228,10 @@ localPlayer.CharacterAdded:Connect(function()
     isAiming = false
     lastSkillTriggerTime = 0
     lastTargetKiller = nil
+    if aimDashConnection then
+        aimDashConnection:Disconnect()
+        aimDashConnection = nil
+    end
     task.delay(0.5, twoTimeRefreshUI)
 end)
 
