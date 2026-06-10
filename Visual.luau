@@ -18,6 +18,8 @@ PathfindingService = game:GetService("PathfindingService")
 LocalizationService = game:GetService("LocalizationService")
 Debris = game:GetService("Debris")
 
+MapFolder = Workspace:WaitForChild("Map")
+IngameFolder = MapFolder:WaitForChild("Ingame")
 killersFolder = Workspace:WaitForChild("Players"):WaitForChild("Killers")
 survivorsFolder = Workspace:WaitForChild("Players"):WaitForChild("Survivors")
 localPlayer = Players.LocalPlayer
@@ -2647,42 +2649,52 @@ local function findMap()
     return Workspace:FindFirstChild("Map")
 end
 
-local function getPizzaCF()
-    local map = findMap()
-    if not map then return nil end
+-- ================= FIX FULL: NHẶT PIZZA TRỰC TIẾP =================
 
-    local pizza = map:FindFirstChild("Pizza")
+local function getPizzaCF()
+    -- Dùng trực tiếp IngameFolder đã khai báo ở đầu script
+    -- IngameFolder = Workspace.Map.Ingame
+    local pizza = IngameFolder:FindFirstChild("Pizza", true)
+    
     if not pizza then return nil end
 
+    -- Xử lý lấy CFrame chuẩn xác cho mọi trường hợp (Part, Model, hoặc CFrameValue)
     if pizza:IsA("BasePart") or pizza:IsA("MeshPart") or pizza:IsA("UnionOperation") then
         return pizza.CFrame
     elseif pizza:IsA("Model") then
-        local pp = pizza.PrimaryPart or pizza:FindFirstChildWhichIsA("BasePart")
-        if pp then
-            if not pizza.PrimaryPart then pizza.PrimaryPart = pp end
-            return pp.CFrame
-        end
+        -- Ưu tiên PrimaryPart, nếu chưa set thì lấy Part đầu tiên bên trong
+        local pp = pizza.PrimaryPart or pizza:FindFirstChildWhichIsA("BasePart", true)
+        return pp and pp.CFrame or nil
     elseif pizza:IsA("CFrameValue") then
         return pizza.Value
     end
+    
     return nil
 end
 
 local function tryEatPizza()
     local hrp = getHRP()
     local hum = getHumanoid()
+    
+    -- Kiểm tra điều kiện HP
     if not hrp or not hum then return end
     if hum.Health > S.EatPizzaHPThreshold then return end
 
     local pizzaCF = getPizzaCF()
-    if not pizzaCF then return end
+    if not pizzaCF then return end -- Nếu không thấy Pizza thì dừng
 
+    -- Lưu vị trí cũ để sau khi ăn xong quay về
     local oldCF = hrp.CFrame
+    
+    -- Teleport tới Pizza (nâng cao 1 đơn vị để tránh kẹt sàn)
     hrp.CFrame = pizzaCF * CFrame.new(0, 1, 0)
 
+    -- Quay trở lại vị trí cũ sau 0.2 giây
     task.delay(0.2, function()
         pcall(function()
-            hrp.CFrame = oldCF
+            if hrp then 
+                hrp.CFrame = oldCF 
+            end
         end)
     end)
 end
