@@ -2963,9 +2963,10 @@ end
 local S = getgenv().KillerCamlockSettings
 local CAMLOCK_RENDER_KEY = "KillerCamlock_SyncRender_MaxPriority"
 
-local QuickFrame, QuickButton, QuickStroke
+-- Giao diện nút bấm nhanh
+local QuickFrame, QuickButton
 
--- ================= TWEEN HELPER =================
+-- ================= HÀM TWEEN (ANIMATION) =================
 local function tweenObj(obj, properties, duration)
     if not obj then return end
     local tweenInfo = TweenInfo.new(duration or 0.2, Enum.EasingStyle.Sine, Enum.EasingDirection.Out)
@@ -3021,21 +3022,23 @@ local function getNearestSurvivor()
     return nearest
 end
 
--- ================= CẬP NHẬT GIAO DIỆN (CÓ ANIMATION) =================
+-- ================= CẬP NHẬT GIAO DIỆN NÚT NHANH =================
 local function updateQuickGuiAppearance()
-    if not QuickButton or not QuickStroke then return end
+    if not QuickButton or not QuickFrame then return end
+    local stroke = QuickFrame:FindFirstChild("UIStroke")
+    
     if S.Enabled then
         QuickButton.Text = "CAMLOCK: ON"
         tweenObj(QuickButton, {TextColor3 = Color3.fromRGB(255, 75, 75)}, 0.3)
-        tweenObj(QuickStroke, {Color = Color3.fromRGB(255, 75, 75)}, 0.3)
+        if stroke then tweenObj(stroke, {Color = Color3.fromRGB(255, 75, 75)}, 0.3) end
     else
         QuickButton.Text = "CAMLOCK: OFF"
         tweenObj(QuickButton, {TextColor3 = Color3.fromRGB(200, 200, 200)}, 0.3)
-        tweenObj(QuickStroke, {Color = Color3.fromRGB(60, 60, 60)}, 0.3)
+        if stroke then tweenObj(stroke, {Color = Color3.fromRGB(60, 60, 60)}, 0.3) end
     end
 end
 
--- ================= TẠO GUI (CHỐNG LỖI DRAG ĐA ĐIỂM) =================
+-- ================= TẠO GUI BẤM NHANH =================
 local function createQuickGui()
     if CoreGui:FindFirstChild("HutaoQuickCamlock") then 
         CoreGui.HutaoQuickCamlock:Destroy() 
@@ -3050,16 +3053,16 @@ local function createQuickGui()
 
     local frame = Instance.new("Frame")
     frame.Size = UDim2.new(0, 130, 0, 45)
-    frame.Position = UDim2.new(0.85, 0, 0.5, 0)
-    frame.BackgroundColor3 = Color3.fromRGB(20, 20, 20) 
-    frame.BackgroundTransparency = 0.1
+    frame.Position = UDim2.new(0.85, 0, 0.5, 0) 
+    frame.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
     frame.BorderSizePixel = 0
     frame.Active = true
+    frame.AnchorPoint = Vector2.new(0.5, 0.5) -- Thêm AnchorPoint để bóp méo từ tâm
     frame.Parent = sgui
     QuickFrame = frame
 
     local corner = Instance.new("UICorner")
-    corner.CornerRadius = UDim.new(0, 12) -- Bo góc cong tròn, mượt mà hơn
+    corner.CornerRadius = UDim.new(0, 12) -- ĐÃ FIX: Bo góc mượt mà
     corner.Parent = frame
 
     local stroke = Instance.new("UIStroke")
@@ -3067,7 +3070,6 @@ local function createQuickGui()
     stroke.Color = Color3.fromRGB(60, 60, 60)
     stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
     stroke.Parent = frame
-    QuickStroke = stroke
 
     local btn = Instance.new("TextButton")
     btn.Size = UDim2.new(1, 0, 1, 0)
@@ -3079,18 +3081,18 @@ local function createQuickGui()
     btn.Parent = frame
     QuickButton = btn
 
-    -- Logic Kéo Thả (Đã Fix lỗi Multitouch)
-    local dragInput = nil -- Khóa chặt ngón tay đang thực hiện kéo
+    -- ĐÃ FIX: Logic kéo thả an toàn, chống giật teleport khi chạm nhiều ngón
+    local dragInput = nil 
     local dragStart = nil
     local startPos = nil
     local totalDragDist = 0
 
     btn.InputBegan:Connect(function(input)
         if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-            -- Hiệu ứng bóp vào khi nhấn
-            tweenObj(frame, {Size = UDim2.new(0, 125, 0, 43)}, 0.1)
+            -- Animation bóp méo khi đè nút
+            tweenObj(frame, {Size = UDim2.new(0, 120, 0, 40)}, 0.1)
             
-            dragInput = input -- Lưu lại input cụ thể này
+            dragInput = input -- Khóa chặt vào ngón tay này
             dragStart = input.Position
             startPos = frame.Position
             totalDragDist = 0
@@ -3098,7 +3100,7 @@ local function createQuickGui()
     end)
 
     UserInputService.InputChanged:Connect(function(input)
-        -- Chỉ cho phép dịch chuyển nếu input đang thay đổi CHÍNH LÀ input đã bắt đầu kéo
+        -- Chỉ di chuyển khi đúng ngón tay đã chạm ban đầu
         if dragInput and input == dragInput then
             local delta = input.Position - dragStart
             totalDragDist = totalDragDist + delta.Magnitude
@@ -3108,9 +3110,9 @@ local function createQuickGui()
 
     btn.InputEnded:Connect(function(input)
         if input == dragInput then
-            -- Hiệu ứng bung ra khi nhả tay
-            tweenObj(frame, {Size = UDim2.new(0, 130, 0, 45)}, 0.1)
-            dragInput = nil -- Xóa khóa ngón tay
+            -- Trả lại kích thước ban đầu
+            tweenObj(frame, {Size = UDim2.new(0, 130, 0, 45)}, 0.15)
+            dragInput = nil 
             
             if totalDragDist < 8 then 
                 local targetState = not S.Enabled
@@ -3133,11 +3135,10 @@ local function disable()
     S.PinchTouches = {}
     S.LastPinchDistance = nil
 
-    local cam = workspace.CurrentCamera
-    if cam then
-        cam.CameraType = Enum.CameraType.Custom
+    if Camera then
+        Camera.CameraType = Enum.CameraType.Custom
         if S.OriginalCameraSubject then
-            cam.CameraSubject = S.OriginalCameraSubject
+            Camera.CameraSubject = S.OriginalCameraSubject
             S.OriginalCameraSubject = nil
         end
     end
@@ -3150,12 +3151,10 @@ end
 -- ================= BẬT CAMLOCK =================
 local function enable()
     if S.OriginalCameraSubject then return end 
+    if not Camera then return end
 
-    local cam = workspace.CurrentCamera
-    if not cam then return end
-
-    S.OriginalCameraSubject = cam.CameraSubject
-    S.CustomCameraCFrame = cam.CFrame 
+    S.OriginalCameraSubject = Camera.CameraSubject
+    S.CustomCameraCFrame = Camera.CFrame 
 
     RunService:BindToRenderStep(CAMLOCK_RENDER_KEY, Enum.RenderPriority.Camera.Value + 50, function()
         if not S.Enabled then
@@ -3164,8 +3163,8 @@ local function enable()
         end
 
         if not isKiller() then
-            if cam.CameraType == Enum.CameraType.Scriptable then
-                cam.CameraType = Enum.CameraType.Custom
+            if Camera.CameraType == Enum.CameraType.Scriptable then
+                Camera.CameraType = Enum.CameraType.Custom
             end
             return
         end
@@ -3175,8 +3174,8 @@ local function enable()
             if newHRP then
                 S.Target = newHRP
             else
-                if cam.CameraType == Enum.CameraType.Scriptable then
-                    cam.CameraType = Enum.CameraType.Custom
+                if Camera.CameraType == Enum.CameraType.Scriptable then
+                    Camera.CameraType = Enum.CameraType.Custom
                 end
                 return
             end
@@ -3189,18 +3188,17 @@ local function enable()
         local anchorPos = myRoot.Position + Vector3.new(0, S.HeightOffset or 1.5, 0)
         
         local targetDir = (aimPos - anchorPos).Unit
-        local currentDir = S.CustomCameraCFrame and S.CustomCameraCFrame.LookVector or cam.CFrame.LookVector
+        local currentDir = S.CustomCameraCFrame and S.CustomCameraCFrame.LookVector or Camera.CFrame.LookVector
         local smoothDir = currentDir:Lerp(targetDir, 0.2).Unit 
         
         local camPos = anchorPos - smoothDir * S.ZoomDistance
         S.CustomCameraCFrame = CFrame.lookAt(camPos, camPos + smoothDir)
 
-        cam.CameraType = Enum.CameraType.Scriptable
-        cam.CFrame = S.CustomCameraCFrame
-        cam.Focus = CFrame.new(aimPos) 
+        Camera.CameraType = Enum.CameraType.Scriptable
+        Camera.CFrame = S.CustomCameraCFrame
+        Camera.Focus = CFrame.new(aimPos) 
     end)
 
-    -- Zoom & Pinch Logic (Giữ nguyên)
     local mouseConn = UserInputService.InputChanged:Connect(function(input)
         if not S.Enabled then return end
         if input.UserInputType == Enum.UserInputType.MouseWheel then
@@ -3266,18 +3264,21 @@ getgenv().KillerCamlockAPI = {
         if sgui and QuickFrame then
             if state then
                 sgui.Enabled = true
-                -- Hiệu ứng trượt và hiện ra mượt mà
-                QuickFrame.Position = UDim2.new(0.85, 50, 0.5, 0)
+                -- Animation trượt từ ngoài vào trong
+                QuickFrame.Position = UDim2.new(0.95, 50, QuickFrame.Position.Y.Scale, QuickFrame.Position.Y.Offset)
                 QuickFrame.BackgroundTransparency = 1
                 QuickButton.TextTransparency = 1
-                tweenObj(QuickFrame, {Position = UDim2.new(0.85, 0, 0.5, 0), BackgroundTransparency = 0.1}, 0.3)
-                tweenObj(QuickButton, {TextTransparency = 0}, 0.3)
-                tweenObj(QuickStroke, {Transparency = 0}, 0.3)
+                if QuickFrame:FindFirstChild("UIStroke") then QuickFrame.UIStroke.Transparency = 1 end
+                
+                tweenObj(QuickFrame, {Position = UDim2.new(0.85, 0, QuickFrame.Position.Y.Scale, QuickFrame.Position.Y.Offset), BackgroundTransparency = 0}, 0.4)
+                tweenObj(QuickButton, {TextTransparency = 0}, 0.4)
+                if QuickFrame:FindFirstChild("UIStroke") then tweenObj(QuickFrame.UIStroke, {Transparency = 0}, 0.4) end
             else
-                -- Hiệu ứng trượt và mờ dần trước khi ẩn
-                tweenObj(QuickFrame, {Position = UDim2.new(0.85, 50, 0.5, 0), BackgroundTransparency = 1}, 0.3)
+                -- Animation trượt ngược ra ngoài rồi mới tắt
+                tweenObj(QuickFrame, {Position = UDim2.new(0.95, 50, QuickFrame.Position.Y.Scale, QuickFrame.Position.Y.Offset), BackgroundTransparency = 1}, 0.3)
                 tweenObj(QuickButton, {TextTransparency = 1}, 0.3)
-                tweenObj(QuickStroke, {Transparency = 1}, 0.3)
+                if QuickFrame:FindFirstChild("UIStroke") then tweenObj(QuickFrame.UIStroke, {Transparency = 1}, 0.3) end
+                
                 task.delay(0.3, function() sgui.Enabled = false end)
             end
         end
@@ -3302,7 +3303,6 @@ Players.LocalPlayer.CharacterAdded:Connect(function()
         updateQuickGuiAppearance()
     end
 end)
-
 
 -- 007n7
 
