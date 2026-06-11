@@ -2944,18 +2944,14 @@ getgenv().EliotAPI = {
 
 -- Camlock Bypass Pro
 
--- =============================================================================
--- HUTAO HUB - KILLER CAMLOCK LOGIC ENGINE
--- =============================================================================
-
 if not getgenv().KillerCamlockSettings then
     getgenv().KillerCamlockSettings = {
         Enabled = false,
         Target = nil,
         ZoomDistance = 10,
-        HeightOffset = 1.5,             -- Ý TƯỞNG 1: Độ cao tùy chỉnh mặc định
+        HeightOffset = 1.5,
         AimPart = "Head",               
-        QuickGuiVisible = false,        -- Ý TƯỞNG 2: Trạng thái ẩn/hiện nút nhanh
+        QuickGuiVisible = false,
         OriginalCameraSubject = nil,   
         CustomCameraCFrame = nil,      
         Connections = {},
@@ -2966,10 +2962,17 @@ end
 
 local S = getgenv().KillerCamlockSettings
 local CAMLOCK_RENDER_KEY = "KillerCamlock_SyncRender_MaxPriority"
-local CoreGui = game:GetService("CoreGui")
 
--- Giao diện nút bấm nhanh (Hu Tao Hub Theme)
-local QuickFrame, QuickButton
+local QuickFrame, QuickButton, QuickStroke
+
+-- ================= TWEEN HELPER =================
+local function tweenObj(obj, properties, duration)
+    if not obj then return end
+    local tweenInfo = TweenInfo.new(duration or 0.2, Enum.EasingStyle.Sine, Enum.EasingDirection.Out)
+    local tween = TweenService:Create(obj, tweenInfo, properties)
+    tween:Play()
+    return tween
+end
 
 -- ================= HÀM LẤY BỘ PHẬN AIM =================
 local function getAimPartPosition(model, aimPartName)
@@ -3018,21 +3021,21 @@ local function getNearestSurvivor()
     return nearest
 end
 
--- ================= CẬP NHẬT GIAO DIỆN NÚT NHANH =================
+-- ================= CẬP NHẬT GIAO DIỆN (CÓ ANIMATION) =================
 local function updateQuickGuiAppearance()
-    if not QuickButton then return end
+    if not QuickButton or not QuickStroke then return end
     if S.Enabled then
         QuickButton.Text = "CAMLOCK: ON"
-        QuickButton.TextColor3 = Color3.fromRGB(255, 75, 75) -- Đỏ sáng rực rỡ
-        QuickButton.UIStroke.Color = Color3.fromRGB(255, 75, 75)
+        tweenObj(QuickButton, {TextColor3 = Color3.fromRGB(255, 75, 75)}, 0.3)
+        tweenObj(QuickStroke, {Color = Color3.fromRGB(255, 75, 75)}, 0.3)
     else
         QuickButton.Text = "CAMLOCK: OFF"
-        QuickButton.TextColor3 = Color3.fromRGB(200, 200, 200) -- Xám tinh tế
-        QuickButton.UIStroke.Color = Color3.fromRGB(60, 60, 60)
+        tweenObj(QuickButton, {TextColor3 = Color3.fromRGB(200, 200, 200)}, 0.3)
+        tweenObj(QuickStroke, {Color = Color3.fromRGB(60, 60, 60)}, 0.3)
     end
 end
 
--- ================= TẠO GUI BẤM NHANH (ĐẸP & CHỐNG CLICK NHẦM) =================
+-- ================= TẠO GUI (CHỐNG LỖI DRAG ĐA ĐIỂM) =================
 local function createQuickGui()
     if CoreGui:FindFirstChild("HutaoQuickCamlock") then 
         CoreGui.HutaoQuickCamlock:Destroy() 
@@ -3047,15 +3050,16 @@ local function createQuickGui()
 
     local frame = Instance.new("Frame")
     frame.Size = UDim2.new(0, 130, 0, 45)
-    frame.Position = UDim2.new(0.85, 0, 0.5, 0) -- Vị trí bên phải màn hình
-    frame.BackgroundColor3 = Color3.fromRGB(25, 25, 25) -- Nền tối huyền bí
+    frame.Position = UDim2.new(0.85, 0, 0.5, 0)
+    frame.BackgroundColor3 = Color3.fromRGB(20, 20, 20) 
+    frame.BackgroundTransparency = 0.1
     frame.BorderSizePixel = 0
     frame.Active = true
     frame.Parent = sgui
     QuickFrame = frame
 
     local corner = Instance.new("UICorner")
-    corner.CornerRadius = UDim.new(0, 10)
+    corner.CornerRadius = UDim.new(0, 12) -- Bo góc cong tròn, mượt mà hơn
     corner.Parent = frame
 
     local stroke = Instance.new("UIStroke")
@@ -3063,6 +3067,7 @@ local function createQuickGui()
     stroke.Color = Color3.fromRGB(60, 60, 60)
     stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
     stroke.Parent = frame
+    QuickStroke = stroke
 
     local btn = Instance.new("TextButton")
     btn.Size = UDim2.new(1, 0, 1, 0)
@@ -3074,25 +3079,27 @@ local function createQuickGui()
     btn.Parent = frame
     QuickButton = btn
 
-    local btnStroke = stroke:Clone()
-    btnStroke.Parent = btn
-
-    -- Logic kéo thả mượt mà mượt mà kèm chống click sai khi đang di chuyển nút
-    local dragStart, startPos
-    local dragging = false
+    -- Logic Kéo Thả (Đã Fix lỗi Multitouch)
+    local dragInput = nil -- Khóa chặt ngón tay đang thực hiện kéo
+    local dragStart = nil
+    local startPos = nil
     local totalDragDist = 0
 
     btn.InputBegan:Connect(function(input)
         if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            -- Hiệu ứng bóp vào khi nhấn
+            tweenObj(frame, {Size = UDim2.new(0, 125, 0, 43)}, 0.1)
+            
+            dragInput = input -- Lưu lại input cụ thể này
             dragStart = input.Position
             startPos = frame.Position
-            dragging = true
             totalDragDist = 0
         end
     end)
 
     UserInputService.InputChanged:Connect(function(input)
-        if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+        -- Chỉ cho phép dịch chuyển nếu input đang thay đổi CHÍNH LÀ input đã bắt đầu kéo
+        if dragInput and input == dragInput then
             local delta = input.Position - dragStart
             totalDragDist = totalDragDist + delta.Magnitude
             frame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
@@ -3100,9 +3107,12 @@ local function createQuickGui()
     end)
 
     btn.InputEnded:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-            dragging = false
-            if totalDragDist < 8 then -- Khoảng cách dịch chuyển nhỏ hơn 8 pixels mới tính là Click thực sự
+        if input == dragInput then
+            -- Hiệu ứng bung ra khi nhả tay
+            tweenObj(frame, {Size = UDim2.new(0, 130, 0, 45)}, 0.1)
+            dragInput = nil -- Xóa khóa ngón tay
+            
+            if totalDragDist < 8 then 
                 local targetState = not S.Enabled
                 getgenv().KillerCamlockAPI.Toggle(targetState)
             end
@@ -3147,14 +3157,12 @@ local function enable()
     S.OriginalCameraSubject = cam.CameraSubject
     S.CustomCameraCFrame = cam.CFrame 
 
-    -- LỖI SỬA TẠI ĐÂY: RenderStep liên tục lắng nghe trạng thái của màn chơi
     RunService:BindToRenderStep(CAMLOCK_RENDER_KEY, Enum.RenderPriority.Camera.Value + 50, function()
         if not S.Enabled then
             disable()
             return
         end
 
-        -- Trường hợp chưa làm Killer: Giữ camera tự do bình thường
         if not isKiller() then
             if cam.CameraType == Enum.CameraType.Scriptable then
                 cam.CameraType = Enum.CameraType.Custom
@@ -3162,13 +3170,11 @@ local function enable()
             return
         end
 
-        -- Trường hợp làm Killer nhưng chưa tìm thấy mục tiêu (Hoặc mục tiêu đã chết)
         if not (S.Target and S.Target.Parent and S.Target.Parent:FindFirstChild("Humanoid") and S.Target.Parent.Humanoid.Health > 0) then
             local newHRP = getNearestSurvivor()
             if newHRP then
                 S.Target = newHRP
             else
-                -- Chưa có Survivor xuất hiện: Trả lại camera tự do và chờ đợi tiếp tục
                 if cam.CameraType == Enum.CameraType.Scriptable then
                     cam.CameraType = Enum.CameraType.Custom
                 end
@@ -3179,10 +3185,7 @@ local function enable()
         local myRoot = playerCharacter and playerCharacter:FindFirstChild("HumanoidRootPart")
         if not myRoot then return end
 
-        -- Lấy vị trí khóa mục tiêu
         local aimPos = getAimPartPosition(S.Target.Parent, S.AimPart) or S.Target.Position
-
-        -- Sử dụng độ cao chỉnh tay linh hoạt thông qua cấu hình S.HeightOffset
         local anchorPos = myRoot.Position + Vector3.new(0, S.HeightOffset or 1.5, 0)
         
         local targetDir = (aimPos - anchorPos).Unit
@@ -3197,7 +3200,7 @@ local function enable()
         cam.Focus = CFrame.new(aimPos) 
     end)
 
-    -- Đăng ký hệ thống Zoom
+    -- Zoom & Pinch Logic (Giữ nguyên)
     local mouseConn = UserInputService.InputChanged:Connect(function(input)
         if not S.Enabled then return end
         if input.UserInputType == Enum.UserInputType.MouseWheel then
@@ -3206,7 +3209,6 @@ local function enable()
     end)
     table.insert(S.Connections, mouseConn)
 
-    -- Cấu trúc điều hướng cảm ứng đa điểm cho Mobile
     S.PinchTouches = {}
     S.LastPinchDistance = nil
 
@@ -3249,7 +3251,6 @@ local function enable()
     updateQuickGuiAppearance()
 end
 
--- Khởi tạo nút nhanh ban đầu
 createQuickGui()
 
 -- ================= GLOBAL API ENGINE =================
@@ -3261,8 +3262,24 @@ getgenv().KillerCamlockAPI = {
     end,
     SetQuickGuiVisible = function(state)
         S.QuickGuiVisible = state
-        if CoreGui:FindFirstChild("HutaoQuickCamlock") then
-            CoreGui.HutaoQuickCamlock.Enabled = state
+        local sgui = CoreGui:FindFirstChild("HutaoQuickCamlock")
+        if sgui and QuickFrame then
+            if state then
+                sgui.Enabled = true
+                -- Hiệu ứng trượt và hiện ra mượt mà
+                QuickFrame.Position = UDim2.new(0.85, 50, 0.5, 0)
+                QuickFrame.BackgroundTransparency = 1
+                QuickButton.TextTransparency = 1
+                tweenObj(QuickFrame, {Position = UDim2.new(0.85, 0, 0.5, 0), BackgroundTransparency = 0.1}, 0.3)
+                tweenObj(QuickButton, {TextTransparency = 0}, 0.3)
+                tweenObj(QuickStroke, {Transparency = 0}, 0.3)
+            else
+                -- Hiệu ứng trượt và mờ dần trước khi ẩn
+                tweenObj(QuickFrame, {Position = UDim2.new(0.85, 50, 0.5, 0), BackgroundTransparency = 1}, 0.3)
+                tweenObj(QuickButton, {TextTransparency = 1}, 0.3)
+                tweenObj(QuickStroke, {Transparency = 1}, 0.3)
+                task.delay(0.3, function() sgui.Enabled = false end)
+            end
         end
     end,
     SetHeightOffset = function(val)
@@ -3278,7 +3295,6 @@ getgenv().KillerCamlockAPI = {
     end
 }
 
--- Khi hồi sinh
 Players.LocalPlayer.CharacterAdded:Connect(function()
     if S.Enabled then
         disable()
@@ -3286,6 +3302,7 @@ Players.LocalPlayer.CharacterAdded:Connect(function()
         updateQuickGuiAppearance()
     end
 end)
+
 
 -- 007n7
 
