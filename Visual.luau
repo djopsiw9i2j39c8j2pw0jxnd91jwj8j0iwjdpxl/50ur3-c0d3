@@ -2972,12 +2972,13 @@ local function getAimPartPosition(model, aimPartName)
         ["Left Leg"] = "LeftFoot",
         ["Right Leg"] = "RightFoot"
     }
+    -- Thử lấy part theo R15 trước
     local partName = partMap[aimPartName] or "Head"
     local part = model:FindFirstChild(partName)
     if part and part:IsA("BasePart") then
         return part.Position
     end
-    -- Fallback: tìm theo tên gốc
+    -- Fallback: tìm theo tên gốc (Cho R6)
     part = model:FindFirstChild(aimPartName)
     if part and part:IsA("BasePart") then
         return part.Position
@@ -3019,7 +3020,7 @@ local function enable()
 
     local targetHRP = getNearestSurvivor()
     if not targetHRP then return end
-    S.Target = targetHRP  -- vẫn lưu HRP để tiện kiểm tra tồn tại
+    S.Target = targetHRP
 
     local cam = workspace.CurrentCamera
     if not cam then return end
@@ -3040,7 +3041,7 @@ local function enable()
             return
         end
 
-        -- Kiểm tra target còn sống và cập nhật
+        -- Kiểm tra target còn sống không, nếu chết/mất thì đổi mục tiêu
         if not (S.Target and S.Target.Parent and S.Target.Parent:FindFirstChild("Humanoid") and S.Target.Parent.Humanoid.Health > 0) then
             local newHRP = getNearestSurvivor()
             if newHRP then
@@ -3053,20 +3054,26 @@ local function enable()
         local myRoot = playerCharacter and playerCharacter:FindFirstChild("HumanoidRootPart")
         if not myRoot then return end
 
-        -- Lấy vị trí bộ phận aim
+        -- Lấy vị trí cần ngắm của mục tiêu
         local aimPos = getAimPartPosition(S.Target.Parent, S.AimPart) or S.Target.Position
 
-        local targetDir = (aimPos - myRoot.Position).Unit
-        local currentDir = S.CustomCameraCFrame.LookVector
-        local smoothDir = currentDir:Lerp(targetDir, 0.2).Unit
+        -- ĐÃ FIX TẠI ĐÂY: Tính anchorPos (điểm neo camera) cao 1.5 studs (ngang tầm mắt)
+        local anchorPos = myRoot.Position + Vector3.new(0, 1.5, 0)
         
-        local anchorPos = myRoot.Position + Vector3.new(0, 3, 0)
+        -- ĐÃ FIX TẠI ĐÂY: Tính toán hướng nhìn từ anchorPos thay vì từ myRoot
+        local targetDir = (aimPos - anchorPos).Unit
+        local currentDir = S.CustomCameraCFrame.LookVector
+        local smoothDir = currentDir:Lerp(targetDir, 0.2).Unit -- Giữ mượt
+        
+        -- Đặt vị trí cam lùi lại theo ZoomDistance
         local camPos = anchorPos - smoothDir * S.ZoomDistance
+        
+        -- Cập nhật CFrame để cam ở vị trí camPos và nhìn chuẩn vào mục tiêu
         S.CustomCameraCFrame = CFrame.lookAt(camPos, camPos + smoothDir)
 
         cam.CameraType = Enum.CameraType.Custom
         cam.CFrame = S.CustomCameraCFrame
-        cam.Focus = CFrame.new(aimPos)  -- focus vào đúng bộ phận
+        cam.Focus = CFrame.new(aimPos) 
     end)
 
     -- Zoom chuột (PC)
