@@ -2944,12 +2944,18 @@ getgenv().EliotAPI = {
 
 -- Camlock Bypass Pro
 
+-- =============================================================================
+-- HUTAO HUB - KILLER CAMLOCK LOGIC ENGINE
+-- =============================================================================
+
 if not getgenv().KillerCamlockSettings then
     getgenv().KillerCamlockSettings = {
         Enabled = false,
         Target = nil,
         ZoomDistance = 10,
-        AimPart = "Head",               -- Mặc định aim vào đầu
+        HeightOffset = 1.5,             -- Ý TƯỞNG 1: Độ cao tùy chỉnh mặc định
+        AimPart = "Head",               
+        QuickGuiVisible = false,        -- Ý TƯỞNG 2: Trạng thái ẩn/hiện nút nhanh
         OriginalCameraSubject = nil,   
         CustomCameraCFrame = nil,      
         Connections = {},
@@ -2960,6 +2966,10 @@ end
 
 local S = getgenv().KillerCamlockSettings
 local CAMLOCK_RENDER_KEY = "KillerCamlock_SyncRender_MaxPriority"
+local CoreGui = game:GetService("CoreGui")
+
+-- Giao diện nút bấm nhanh (Hu Tao Hub Theme)
+local QuickFrame, QuickButton
 
 -- ================= HÀM LẤY BỘ PHẬN AIM =================
 local function getAimPartPosition(model, aimPartName)
@@ -2972,18 +2982,13 @@ local function getAimPartPosition(model, aimPartName)
         ["Left Leg"] = "LeftFoot",
         ["Right Leg"] = "RightFoot"
     }
-    -- Thử lấy part theo R15 trước
     local partName = partMap[aimPartName] or "Head"
     local part = model:FindFirstChild(partName)
-    if part and part:IsA("BasePart") then
-        return part.Position
-    end
-    -- Fallback: tìm theo tên gốc (Cho R6)
+    if part and part:IsA("BasePart") then return part.Position end
+    
     part = model:FindFirstChild(aimPartName)
-    if part and part:IsA("BasePart") then
-        return part.Position
-    end
-    -- Fallback cuối: HumanoidRootPart
+    if part and part:IsA("BasePart") then return part.Position end
+    
     local hrp = model:FindFirstChild("HumanoidRootPart")
     return hrp and hrp.Position
 end
@@ -3013,127 +3018,98 @@ local function getNearestSurvivor()
     return nearest
 end
 
--- ================= BẬT CAMLOCK =================
-local function enable()
-    if not isKiller() then return end
-    if S.OriginalCameraSubject then return end 
+-- ================= CẬP NHẬT GIAO DIỆN NÚT NHANH =================
+local function updateQuickGuiAppearance()
+    if not QuickButton then return end
+    if S.Enabled then
+        QuickButton.Text = "CAMLOCK: ON"
+        QuickButton.TextColor3 = Color3.fromRGB(255, 75, 75) -- Đỏ sáng rực rỡ
+        QuickButton.UIStroke.Color = Color3.fromRGB(255, 75, 75)
+    else
+        QuickButton.Text = "CAMLOCK: OFF"
+        QuickButton.TextColor3 = Color3.fromRGB(200, 200, 200) -- Xám tinh tế
+        QuickButton.UIStroke.Color = Color3.fromRGB(60, 60, 60)
+    end
+end
 
-    local targetHRP = getNearestSurvivor()
-    if not targetHRP then return end
-    S.Target = targetHRP
-
-    local cam = workspace.CurrentCamera
-    if not cam then return end
-
-    S.OriginalCameraSubject = cam.CameraSubject
-    cam.CameraType = Enum.CameraType.Custom
-
-    local hum = playerCharacter and playerCharacter:FindFirstChildOfClass("Humanoid")
-    if hum then
-        cam.CameraSubject = hum
+-- ================= TẠO GUI BẤM NHANH (ĐẸP & CHỐNG CLICK NHẦM) =================
+local function createQuickGui()
+    if CoreGui:FindFirstChild("HutaoQuickCamlock") then 
+        CoreGui.HutaoQuickCamlock:Destroy() 
     end
 
-    S.CustomCameraCFrame = cam.CFrame 
+    local sgui = Instance.new("ScreenGui")
+    sgui.Name = "HutaoQuickCamlock"
+    sgui.ResetOnSpawn = false
+    sgui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    sgui.Enabled = S.QuickGuiVisible
+    sgui.Parent = CoreGui
 
-    RunService:BindToRenderStep(CAMLOCK_RENDER_KEY, Enum.RenderPriority.Camera.Value + 50, function()
-        if not S.Enabled or not isKiller() then
-            disable()
-            return
+    local frame = Instance.new("Frame")
+    frame.Size = UDim2.new(0, 130, 0, 45)
+    frame.Position = UDim2.new(0.85, 0, 0.5, 0) -- Vị trí bên phải màn hình
+    frame.BackgroundColor3 = Color3.fromRGB(25, 25, 25) -- Nền tối huyền bí
+    frame.BorderSizePixel = 0
+    frame.Active = true
+    frame.Parent = sgui
+    QuickFrame = frame
+
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 10)
+    corner.Parent = frame
+
+    local stroke = Instance.new("UIStroke")
+    stroke.Thickness = 2
+    stroke.Color = Color3.fromRGB(60, 60, 60)
+    stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+    stroke.Parent = frame
+
+    local btn = Instance.new("TextButton")
+    btn.Size = UDim2.new(1, 0, 1, 0)
+    btn.BackgroundTransparency = 1
+    btn.Text = "CAMLOCK: OFF"
+    btn.Font = Enum.Font.GothamBold
+    btn.TextSize = 14
+    btn.TextColor3 = Color3.fromRGB(200, 200, 200)
+    btn.Parent = frame
+    QuickButton = btn
+
+    local btnStroke = stroke:Clone()
+    btnStroke.Parent = btn
+
+    -- Logic kéo thả mượt mà mượt mà kèm chống click sai khi đang di chuyển nút
+    local dragStart, startPos
+    local dragging = false
+    local totalDragDist = 0
+
+    btn.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragStart = input.Position
+            startPos = frame.Position
+            dragging = true
+            totalDragDist = 0
         end
+    end)
 
-        -- Kiểm tra target còn sống không, nếu chết/mất thì đổi mục tiêu
-        if not (S.Target and S.Target.Parent and S.Target.Parent:FindFirstChild("Humanoid") and S.Target.Parent.Humanoid.Health > 0) then
-            local newHRP = getNearestSurvivor()
-            if newHRP then
-                S.Target = newHRP
-            else
-                return
+    UserInputService.InputChanged:Connect(function(input)
+        if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+            local delta = input.Position - dragStart
+            totalDragDist = totalDragDist + delta.Magnitude
+            frame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+        end
+    end)
+
+    btn.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = false
+            if totalDragDist < 8 then -- Khoảng cách dịch chuyển nhỏ hơn 8 pixels mới tính là Click thực sự
+                local targetState = not S.Enabled
+                getgenv().KillerCamlockAPI.Toggle(targetState)
             end
         end
-
-        local myRoot = playerCharacter and playerCharacter:FindFirstChild("HumanoidRootPart")
-        if not myRoot then return end
-
-        -- Lấy vị trí cần ngắm của mục tiêu
-        local aimPos = getAimPartPosition(S.Target.Parent, S.AimPart) or S.Target.Position
-
-        -- ĐÃ FIX TẠI ĐÂY: Tính anchorPos (điểm neo camera) cao 1.5 studs (ngang tầm mắt)
-        local anchorPos = myRoot.Position + Vector3.new(0, 1.5, 0)
-        
-        -- ĐÃ FIX TẠI ĐÂY: Tính toán hướng nhìn từ anchorPos thay vì từ myRoot
-        local targetDir = (aimPos - anchorPos).Unit
-        local currentDir = S.CustomCameraCFrame.LookVector
-        local smoothDir = currentDir:Lerp(targetDir, 0.2).Unit -- Giữ mượt
-        
-        -- Đặt vị trí cam lùi lại theo ZoomDistance
-        local camPos = anchorPos - smoothDir * S.ZoomDistance
-        
-        -- Cập nhật CFrame để cam ở vị trí camPos và nhìn chuẩn vào mục tiêu
-        S.CustomCameraCFrame = CFrame.lookAt(camPos, camPos + smoothDir)
-
-        cam.CameraType = Enum.CameraType.Custom
-        cam.CFrame = S.CustomCameraCFrame
-        cam.Focus = CFrame.new(aimPos) 
     end)
 
-    -- Zoom chuột (PC)
-    local mouseConn = UserInputService.InputChanged:Connect(function(input)
-        if not S.Enabled then return end
-        if input.UserInputType == Enum.UserInputType.MouseWheel then
-            S.ZoomDistance = math.clamp(S.ZoomDistance - input.Position.Z * 2.0, 2, 30)
-        end
-    end)
-    table.insert(S.Connections, mouseConn)
-
-    -- Zoom pinch (Mobile)
-    S.PinchTouches = {}
-    S.LastPinchDistance = nil
-
-    local touchStartConn = UserInputService.TouchStarted:Connect(function(touch, gameProcessed)
-        if not S.Enabled then return end
-        if gameProcessed then return end
-        table.insert(S.PinchTouches, touch)
-        if #S.PinchTouches == 2 then
-            local pos1 = Vector2.new(S.PinchTouches[1].Position.X, S.PinchTouches[1].Position.Y)
-            local pos2 = Vector2.new(S.PinchTouches[2].Position.X, S.PinchTouches[2].Position.Y)
-            S.LastPinchDistance = (pos1 - pos2).Magnitude
-        end
-    end)
-    table.insert(S.Connections, touchStartConn)
-
-    local touchMoveConn = UserInputService.TouchMoved:Connect(function(touch, gameProcessed)
-        if not S.Enabled then return end
-        if gameProcessed then return end
-        for i, t in ipairs(S.PinchTouches) do
-            if t == touch then
-                S.PinchTouches[i] = touch
-                break
-            end
-        end
-        if #S.PinchTouches == 2 and S.LastPinchDistance then
-            local pos1 = Vector2.new(S.PinchTouches[1].Position.X, S.PinchTouches[1].Position.Y)
-            local pos2 = Vector2.new(S.PinchTouches[2].Position.X, S.PinchTouches[2].Position.Y)
-            local newDist = (pos1 - pos2).Magnitude
-            local delta = newDist - S.LastPinchDistance
-            S.ZoomDistance = math.clamp(S.ZoomDistance - delta / 20, 2, 30)
-            S.LastPinchDistance = newDist
-        end
-    end)
-    table.insert(S.Connections, touchMoveConn)
-
-    local touchEndConn = UserInputService.TouchEnded:Connect(function(touch, gameProcessed)
-        if not S.Enabled then return end
-        for i, t in ipairs(S.PinchTouches) do
-            if t == touch then
-                table.remove(S.PinchTouches, i)
-                break
-            end
-        end
-        if #S.PinchTouches < 2 then
-            S.LastPinchDistance = nil
-        end
-    end)
-    table.insert(S.Connections, touchEndConn)
+    updateQuickGuiAppearance()
 end
 
 -- ================= TẮT CAMLOCK =================
@@ -3149,6 +3125,7 @@ local function disable()
 
     local cam = workspace.CurrentCamera
     if cam then
+        cam.CameraType = Enum.CameraType.Custom
         if S.OriginalCameraSubject then
             cam.CameraSubject = S.OriginalCameraSubject
             S.OriginalCameraSubject = nil
@@ -3157,25 +3134,139 @@ local function disable()
 
     S.Target = nil
     S.CustomCameraCFrame = nil 
+    updateQuickGuiAppearance()
 end
 
--- ================= CHARACTER RESET =================
-Players.LocalPlayer.CharacterAdded:Connect(function()
-    if S.Enabled then
-        disable()
-        S.Enabled = false
-    end
-end)
+-- ================= BẬT CAMLOCK =================
+local function enable()
+    if S.OriginalCameraSubject then return end 
 
--- ================= API CHO UI =================
+    local cam = workspace.CurrentCamera
+    if not cam then return end
+
+    S.OriginalCameraSubject = cam.CameraSubject
+    S.CustomCameraCFrame = cam.CFrame 
+
+    -- LỖI SỬA TẠI ĐÂY: RenderStep liên tục lắng nghe trạng thái của màn chơi
+    RunService:BindToRenderStep(CAMLOCK_RENDER_KEY, Enum.RenderPriority.Camera.Value + 50, function()
+        if not S.Enabled then
+            disable()
+            return
+        end
+
+        -- Trường hợp chưa làm Killer: Giữ camera tự do bình thường
+        if not isKiller() then
+            if cam.CameraType == Enum.CameraType.Scriptable then
+                cam.CameraType = Enum.CameraType.Custom
+            end
+            return
+        end
+
+        -- Trường hợp làm Killer nhưng chưa tìm thấy mục tiêu (Hoặc mục tiêu đã chết)
+        if not (S.Target and S.Target.Parent and S.Target.Parent:FindFirstChild("Humanoid") and S.Target.Parent.Humanoid.Health > 0) then
+            local newHRP = getNearestSurvivor()
+            if newHRP then
+                S.Target = newHRP
+            else
+                -- Chưa có Survivor xuất hiện: Trả lại camera tự do và chờ đợi tiếp tục
+                if cam.CameraType == Enum.CameraType.Scriptable then
+                    cam.CameraType = Enum.CameraType.Custom
+                end
+                return
+            end
+        end
+
+        local myRoot = playerCharacter and playerCharacter:FindFirstChild("HumanoidRootPart")
+        if not myRoot then return end
+
+        -- Lấy vị trí khóa mục tiêu
+        local aimPos = getAimPartPosition(S.Target.Parent, S.AimPart) or S.Target.Position
+
+        -- Sử dụng độ cao chỉnh tay linh hoạt thông qua cấu hình S.HeightOffset
+        local anchorPos = myRoot.Position + Vector3.new(0, S.HeightOffset or 1.5, 0)
+        
+        local targetDir = (aimPos - anchorPos).Unit
+        local currentDir = S.CustomCameraCFrame and S.CustomCameraCFrame.LookVector or cam.CFrame.LookVector
+        local smoothDir = currentDir:Lerp(targetDir, 0.2).Unit 
+        
+        local camPos = anchorPos - smoothDir * S.ZoomDistance
+        S.CustomCameraCFrame = CFrame.lookAt(camPos, camPos + smoothDir)
+
+        cam.CameraType = Enum.CameraType.Scriptable
+        cam.CFrame = S.CustomCameraCFrame
+        cam.Focus = CFrame.new(aimPos) 
+    end)
+
+    -- Đăng ký hệ thống Zoom
+    local mouseConn = UserInputService.InputChanged:Connect(function(input)
+        if not S.Enabled then return end
+        if input.UserInputType == Enum.UserInputType.MouseWheel then
+            S.ZoomDistance = math.clamp(S.ZoomDistance - input.Position.Z * 2.0, 2, 30)
+        end
+    end)
+    table.insert(S.Connections, mouseConn)
+
+    -- Cấu trúc điều hướng cảm ứng đa điểm cho Mobile
+    S.PinchTouches = {}
+    S.LastPinchDistance = nil
+
+    local touchStartConn = UserInputService.TouchStarted:Connect(function(touch, gameProcessed)
+        if not S.Enabled or gameProcessed then return end
+        table.insert(S.PinchTouches, touch)
+        if #S.PinchTouches == 2 then
+            local pos1 = Vector2.new(S.PinchTouches[1].Position.X, S.PinchTouches[1].Position.Y)
+            local pos2 = Vector2.new(S.PinchTouches[2].Position.X, S.PinchTouches[2].Position.Y)
+            S.LastPinchDistance = (pos1 - pos2).Magnitude
+        end
+    end)
+    table.insert(S.Connections, touchStartConn)
+
+    local touchMoveConn = UserInputService.TouchMoved:Connect(function(touch, gameProcessed)
+        if not S.Enabled or gameProcessed then return end
+        for i, t in ipairs(S.PinchTouches) do
+            if t == touch then S.PinchTouches[i] = touch break end
+        end
+        if #S.PinchTouches == 2 and S.LastPinchDistance then
+            local pos1 = Vector2.new(S.PinchTouches[1].Position.X, S.PinchTouches[1].Position.Y)
+            local pos2 = Vector2.new(S.PinchTouches[2].Position.X, S.PinchTouches[2].Position.Y)
+            local newDist = (pos1 - pos2).Magnitude
+            local delta = newDist - S.LastPinchDistance
+            S.ZoomDistance = math.clamp(S.ZoomDistance - delta / 20, 2, 30)
+            S.LastPinchDistance = newDist
+        end
+    end)
+    table.insert(S.Connections, touchMoveConn)
+
+    local touchEndConn = UserInputService.TouchEnded:Connect(function(touch)
+        if not S.Enabled then return end
+        for i, t in ipairs(S.PinchTouches) do
+            if t == touch then table.remove(S.PinchTouches, i) break end
+        end
+        if #S.PinchTouches < 2 then S.LastPinchDistance = nil end
+    end)
+    table.insert(S.Connections, touchEndConn)
+    
+    updateQuickGuiAppearance()
+end
+
+-- Khởi tạo nút nhanh ban đầu
+createQuickGui()
+
+-- ================= GLOBAL API ENGINE =================
 getgenv().KillerCamlockAPI = {
     Toggle = function(state)
         S.Enabled = state
-        if state then
-            enable()
-        else
-            disable()
+        updateQuickGuiAppearance()
+        if state then enable() else disable() end
+    end,
+    SetQuickGuiVisible = function(state)
+        S.QuickGuiVisible = state
+        if CoreGui:FindFirstChild("HutaoQuickCamlock") then
+            CoreGui.HutaoQuickCamlock.Enabled = state
         end
+    end,
+    SetHeightOffset = function(val)
+        S.HeightOffset = tonumber(val) or 1.5
     end,
     SwitchTarget = function()
         if not S.Enabled then return end
@@ -3186,6 +3277,15 @@ getgenv().KillerCamlockAPI = {
         S.AimPart = part
     end
 }
+
+-- Khi hồi sinh
+Players.LocalPlayer.CharacterAdded:Connect(function()
+    if S.Enabled then
+        disable()
+        S.Enabled = false
+        updateQuickGuiAppearance()
+    end
+end)
 
 -- 007n7
 
