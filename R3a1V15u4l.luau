@@ -33,278 +33,122 @@ end)
 
 Camera = Workspace.CurrentCamera
 
--- // ESP Common System - getgenv() Based (FIXED)
--- // Khởi tạo getgenv() settings nếu chưa có
-getgenv().ESP_Settings = getgenv().ESP_Settings or {
-    Color = Color3.fromRGB(255, 0, 0),
-    TextEnabled = true,
-    HighlightEnabled = true,
-    TracerEnabled = false,
-    ShowHP = false,
-    ShowDistance = false
-}
+-- File Thư Viện ESP Logic (Cho lên GitHub/Pastebin Raw)
+if getgenv().ESP_API_LOADED then return end
+getgenv().ESP_API_LOADED = true
 
--- // ESP Registry - Quản lý tất cả ESP đang hoạt động
-local ESPRegistry = {}
-local nextESP_ID = 0
+getgenv().ESP_API = {}
 
--- // Hàm lấy Settings mới nhất từ getgenv (FIX)
-local function GetSettings()
-    return getgenv().ESP_Settings
-end
+-- [5] Kích cỡ Text cố định là 10 theo yêu cầu
+local TEXT_SIZE = 10 
 
--- // Hàm tạo ESP duy nhất không trùng lặp
-local function CreateUniqueESP(targetPlayer, ownerButton)
-    nextESP_ID = nextESP_ID + 1
-    local espID = "ESP_" .. nextESP_ID
-    local espData = {
-        ID = espID,
-        Player = targetPlayer,
-        Owner = ownerButton,
-        Highlight = nil,
-        Billboard = nil,
-        Tracer = nil,
-        Connections = {},
-        Active = true
+-- Hàm khởi tạo ESP cho 1 mục tiêu
+function getgenv().ESP_API.Create(targetModel)
+    local espObjects = {
+        Text = Drawing.new("Text"),
+        Tracer = Drawing.new("Line"),
+        Highlight = Instance.new("Highlight")
     }
     
-    -- // Tạo Highlight (viền trắng, màu trong theo settings)
-    local function CreateHighlight(character)
-        if not character or not character:FindFirstChild("HumanoidRootPart") then return end
-        if character:FindFirstChild(espID .. "_Highlight") then return end
-        
-        local settings = GetSettings()
-        local highlight = Instance.new("Highlight")
-        highlight.Name = espID .. "_Highlight"
-        highlight.FillColor = settings.Color
-        highlight.FillTransparency = 0.5
-        highlight.OutlineColor = Color3.fromRGB(255, 255, 255)
-        highlight.OutlineTransparency = 0
-        highlight.Adornee = character
-        highlight.Parent = character
-        highlight.Enabled = settings.HighlightEnabled
-        espData.Highlight = highlight
-    end
+    -- Setup Text
+    espObjects.Text.Size = TEXT_SIZE
+    espObjects.Text.Center = true
+    espObjects.Text.Outline = true
+    espObjects.Text.ZIndex = 9999 -- [5] Chống bị các script khác đè mất
     
-    -- // Tạo Billboard Text (size 10)
-    local function CreateBillboard(character)
-        if not character or not character:FindFirstChild("Head") then return end
-        if character.Head:FindFirstChild(espID .. "_Billboard") then return end
-        
-        local settings = GetSettings()
-        local billboard = Instance.new("BillboardGui")
-        billboard.Name = espID .. "_Billboard"
-        billboard.Adornee = character.Head
-        billboard.Size = UDim2.new(0, 300, 0, 60)
-        billboard.StudsOffset = Vector3.new(0, 2.5, 0)
-        billboard.AlwaysOnTop = true
-        billboard.Enabled = settings.TextEnabled
-        billboard.Parent = character.Head
-        
-        local label = Instance.new("TextLabel")
-        label.Name = "Label"
-        label.Size = UDim2.new(1, 0, 1, 0)
-        label.BackgroundTransparency = 1
-        label.TextColor3 = settings.Color
-        label.TextStrokeTransparency = 0.5
-        label.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
-        label.TextSize = 10
-        label.Font = Enum.Font.SourceSansBold
-        label.TextWrapped = true
-        label.Parent = billboard
-        
-        espData.Billboard = billboard
-        espData.BillboardLabel = label
-    end
+    -- Setup Tia/Dây
+    espObjects.Tracer.Thickness = 1
+    espObjects.Tracer.ZIndex = 9999
     
-    -- // Tạo Tracer
-    local function CreateTracer()
-        if espData.Tracer then espData.Tracer:Remove() end
-        
-        local settings = GetSettings()
-        local tracer = Drawing.new("Line")
-        tracer.Color = settings.Color
-        tracer.Thickness = 1.5
-        tracer.Transparency = 1
-        tracer.Visible = settings.TracerEnabled
-        espData.Tracer = tracer
-    end
+    -- Setup Highlight (Phát sáng)
+    espObjects.Highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop -- Luôn hiện xuyên tường
+    espObjects.Highlight.OutlineColor = Color3.fromRGB(255, 255, 255) -- [1] Viền luôn CỐ ĐỊNH MÀU TRẮNG
+    espObjects.Highlight.OutlineTransparency = 0
+    espObjects.Highlight.FillTransparency = 0.5
     
-    -- // Cập nhật Billboard Text
-    local function UpdateBillboardText()
-        if not espData.BillboardLabel then return end
-        
-        local settings = GetSettings()
-        local character = targetPlayer.Character
-        if not character or not character:FindFirstChild("Humanoid") then return end
-        
-        local name = targetPlayer.Name
-        local textParts = {name}
-        
-        if settings.ShowDistance then
-            if playerCharacter and playerCharacter:FindFirstChild("HumanoidRootPart") and character:FindFirstChild("HumanoidRootPart") then
-                local distance = math.floor((playerCharacter.HumanoidRootPart.Position - character.HumanoidRootPart.Position).Magnitude)
-                textParts[#textParts + 1] = "[" .. distance .. "m]"
-            end
-        end
-        
-        if settings.ShowHP then
-            local hp = math.floor(character.Humanoid.Health)
-            local maxHP = math.floor(character.Humanoid.MaxHealth)
-            textParts[#textParts + 1] = "[HP: " .. hp .. "/" .. maxHP .. "]"
-        end
-        
-        espData.BillboardLabel.Text = table.concat(textParts, " ")
-    end
-    
-    -- // Loop cập nhật liên tục
-    local function UpdateLoop()
-        if not espData.Active then return end
-        
-        local settings = GetSettings()
-        local character = targetPlayer.Character
-        
-        if character then
-            -- Highlight
-            if espData.Highlight then
-                espData.Highlight.Enabled = settings.HighlightEnabled
-                espData.Highlight.FillColor = settings.Color
-            elseif settings.HighlightEnabled then
-                CreateHighlight(character)
-            end
-            
-            -- Billboard
-            if espData.Billboard then
-                espData.Billboard.Enabled = settings.TextEnabled
-                if settings.TextEnabled then
-                    espData.BillboardLabel.TextColor3 = settings.Color
-                    UpdateBillboardText()
-                end
-            elseif settings.TextEnabled then
-                CreateBillboard(character)
-            end
-            
-            -- Tracer
-            if settings.TracerEnabled then
-                if not espData.Tracer then
-                    CreateTracer()
-                end
-                if character:FindFirstChild("HumanoidRootPart") and playerCharacter and playerCharacter:FindFirstChild("HumanoidRootPart") then
-                    local rootPos = character.HumanoidRootPart.Position
-                    local myRootPos = playerCharacter.HumanoidRootPart.Position
-                    local screenPos, onScreen = Camera:WorldToViewportPoint(rootPos)
-                    local myScreenPos, _ = Camera:WorldToViewportPoint(myRootPos)
-                    
-                    if onScreen and espData.Tracer then
-                        espData.Tracer.From = Vector2.new(myScreenPos.X, myScreenPos.Y)
-                        espData.Tracer.To = Vector2.new(screenPos.X, screenPos.Y)
-                        espData.Tracer.Visible = true
-                        espData.Tracer.Color = settings.Color
-                    elseif espData.Tracer then
-                        espData.Tracer.Visible = false
-                    end
-                end
-            elseif espData.Tracer then
-                espData.Tracer.Visible = false
-            end
-        end
-    end
-    
-    -- // Đăng ký loop vào Heartbeat
-    local heartbeatConn = RunService.Heartbeat:Connect(UpdateLoop)
-    table.insert(espData.Connections, heartbeatConn)
-    
-    -- // CharacterAdded
-    local charAddedConn = targetPlayer.CharacterAdded:Connect(function(character)
-        task.wait(0.3)
-        if espData.Highlight then espData.Highlight:Destroy(); espData.Highlight = nil end
-        if espData.Billboard then espData.Billboard:Destroy(); espData.Billboard = nil; espData.BillboardLabel = nil end
-        if espData.Tracer then espData.Tracer:Remove(); espData.Tracer = nil end
-        
-        local settings = GetSettings()
-        if settings.HighlightEnabled then CreateHighlight(character) end
-        if settings.TextEnabled then CreateBillboard(character) end
-        if settings.TracerEnabled then CreateTracer() end
+    -- Giấu Highlight vào CoreGui để chống game phát hiện/xóa
+    local success = pcall(function()
+        espObjects.Highlight.Parent = CoreGui
     end)
-    table.insert(espData.Connections, charAddedConn)
+    if not success then
+        espObjects.Highlight.Parent = targetModel 
+    end
+
+    return espObjects
+end
+
+-- Hàm cập nhật khung hình 
+-- Thêm tham số `buttonSettings` để mỗi nút truyền cài đặt riêng (màu sắc, bật/tắt) của nút đó vào
+function getgenv().ESP_API.Update(espObjects, targetModel, targetName, localPlayerPos, buttonSettings)
+    -- Nếu mục tiêu chết hoặc mất RootPart thì ẩn hết
+    if not targetModel or not targetModel:FindFirstChild("HumanoidRootPart") then
+        espObjects.Text.Visible = false
+        espObjects.Tracer.Visible = false
+        espObjects.Highlight.Enabled = false
+        return
+    end
+
+    local rootPart = targetModel.HumanoidRootPart
+    local humanoid = targetModel:FindFirstChildOfClass("Humanoid")
     
-    -- // Khởi tạo lần đầu
-    local settings = GetSettings()
-    local currentChar = targetPlayer.Character
-    if currentChar then
-        if settings.HighlightEnabled then CreateHighlight(currentChar) end
-        if settings.TextEnabled then CreateBillboard(currentChar) end
-    end
-    if settings.TracerEnabled then CreateTracer() end
+    local pos, onScreen = Camera:WorldToViewportPoint(rootPart.Position)
+    local distance = (localPlayerPos - rootPart.Position).Magnitude
     
-    return espData
-end
+    -- [1] Lấy màu từ cài đặt CỦA TỪNG NÚT truyền vào (mặc định là trắng nếu lỗi)
+    local nodeColor = buttonSettings.Color or Color3.fromRGB(255, 255, 255)
 
--- // Hàm xóa ESP
-local function RemoveESP(espData)
-    espData.Active = false
-    for _, conn in ipairs(espData.Connections) do
-        conn:Disconnect()
+    -- Xử lý Highlight
+    if buttonSettings.Highlight_Enabled then
+        espObjects.Highlight.Enabled = true
+        espObjects.Highlight.FillColor = nodeColor -- Màu trong chạy theo màu của nút
+        espObjects.Highlight.Adornee = targetModel -- Liên tục bám sát
+    else
+        espObjects.Highlight.Enabled = false
     end
-    espData.Connections = {}
-    if espData.Highlight then espData.Highlight:Destroy(); espData.Highlight = nil end
-    if espData.Billboard then espData.Billboard:Destroy(); espData.Billboard = nil end
-    if espData.Tracer then espData.Tracer:Remove(); espData.Tracer = nil end
-end
 
--- // ESP Manager
-local ESPManager = {}
-
-function ESPManager:RegisterESP(targetPlayer, ownerButton)
-    for id, esp in pairs(ESPRegistry) do
-        if esp.Player == targetPlayer and esp.Owner == ownerButton then
-            RemoveESP(esp)
-            ESPRegistry[id] = nil
-        end
-    end
-    
-    local espData = CreateUniqueESP(targetPlayer, ownerButton)
-    ESPRegistry[espData.ID] = espData
-    return espData.ID
-end
-
-function ESPManager:UnregisterESP(espID)
-    if ESPRegistry[espID] then
-        RemoveESP(ESPRegistry[espID])
-        ESPRegistry[espID] = nil
-    end
-end
-
-function ESPManager:UnregisterAllFromButton(ownerButton)
-    for id, esp in pairs(ESPRegistry) do
-        if esp.Owner == ownerButton then
-            RemoveESP(esp)
-            ESPRegistry[id] = nil
-        end
-    end
-end
-
-function ESPManager:UnregisterAll()
-    for id, esp in pairs(ESPRegistry) do
-        RemoveESP(esp)
-    end
-    ESPRegistry = {}
-end
-
-function ESPManager:RefreshAllESP()
-    local settings = GetSettings()
-    for _, esp in pairs(ESPRegistry) do
-        if esp.Active then
-            if esp.Billboard then
-                esp.Billboard.Enabled = settings.TextEnabled
-                esp.BillboardLabel.TextColor3 = settings.Color
+    -- Xử lý Text & Tracer (Chỉ vẽ nếu mục tiêu nằm trong màn hình)
+    if onScreen then
+        -- Xử lý Text
+        if buttonSettings.Text_Enabled then
+            local textStr = targetName
+            
+            -- [3] Logic hiển thị Text theo khoảng cách và máu
+            if buttonSettings.Show_Distance and not buttonSettings.Show_Health then
+                textStr = textStr .. " [" .. math.floor(distance) .. "m]"
+            elseif not buttonSettings.Show_Distance and buttonSettings.Show_Health and humanoid then
+                textStr = textStr .. " [HP : " .. math.floor(humanoid.Health) .. "/" .. math.floor(humanoid.MaxHealth) .. "]"
+            elseif buttonSettings.Show_Distance and buttonSettings.Show_Health and humanoid then
+                textStr = textStr .. " [" .. math.floor(distance) .. "m] [HP : " .. math.floor(humanoid.Health) .. "/" .. math.floor(humanoid.MaxHealth) .. "]"
             end
-            if esp.Highlight then
-                esp.Highlight.Enabled = settings.HighlightEnabled
-                esp.Highlight.FillColor = settings.Color
-            end
+            
+            espObjects.Text.Text = textStr
+            espObjects.Text.Position = Vector2.new(pos.X, pos.Y - 25) -- Lệch lên trên
+            espObjects.Text.Color = nodeColor -- Text chạy theo màu của nút
+            espObjects.Text.Visible = true
+        else
+            espObjects.Text.Visible = false
         end
+
+        -- Xử lý Tia
+        if buttonSettings.Tracer_Enabled then
+            espObjects.Tracer.From = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y)
+            espObjects.Tracer.To = Vector2.new(pos.X, pos.Y)
+            espObjects.Tracer.Color = nodeColor -- Tia chạy theo màu của nút
+            espObjects.Tracer.Visible = true
+        else
+            espObjects.Tracer.Visible = false
+        end
+    else
+        espObjects.Text.Visible = false
+        espObjects.Tracer.Visible = false
     end
 end
 
-return ESPManager
+-- Hàm dọn dẹp khi tắt
+function getgenv().ESP_API.Remove(espObjects)
+    if espObjects then
+        if espObjects.Text then espObjects.Text:Remove() end
+        if espObjects.Tracer then espObjects.Tracer:Remove() end
+        if espObjects.Highlight then espObjects.Highlight:Destroy() end
+    end
+end
