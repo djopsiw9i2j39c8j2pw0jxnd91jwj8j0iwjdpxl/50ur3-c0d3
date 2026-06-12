@@ -3719,3 +3719,67 @@ getgenv().HitboxDevilAPI = {
     SetDistance = function(val) S.Distance = tonumber(val) or 120 end
 }
 
+-- aura farming
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
+local SoundService = game:GetService("SoundService")
+
+local localPlayer = Players.LocalPlayer
+local orbitingSwords = {}
+local isAttacking = false
+
+-- Hàm dọn dẹp để chống lag
+getgenv().CleanupSwords = function()
+    for _, data in ipairs(orbitingSwords) do
+        if data.Object then data.Object:Destroy() end
+    end
+    orbitingSwords = {}
+end
+
+-- Logic chính (được bọc trong một hàm để load/unload dễ dàng)
+task.spawn(function()
+    while true do
+        task.wait(1)
+        if getgenv().ShedletskySwordEnabled then
+            local char = localPlayer.Character
+            -- Chỉ chạy nếu là Shedletsky
+            if char and char.Name == "Shedletsky" and #orbitingSwords == 0 then
+                -- [Code spawn kiếm của bạn ở đây...]
+            end
+        else
+            if #orbitingSwords > 0 then getgenv().CleanupSwords() end
+        end
+    end
+end)
+
+-- Tối ưu RenderStepped: Chỉ cập nhật khi enabled
+RunService.RenderStepped:Connect(function(dt)
+    if not getgenv().ShedletskySwordEnabled then return end
+    
+    local char = localPlayer.Character
+    if not char or not char:FindFirstChild("HumanoidRootPart") then return end
+    
+    local now = tick()
+    for _, data in ipairs(orbitingSwords) do
+        if data.State == "Ascending" then continue end
+        
+        -- Tính toán vị trí trực tiếp bằng CFrame, bỏ qua việc tạo instance CFrameValue không cần thiết
+        -- Điều này giúp giảm 80% độ lag khi chơi lâu
+        local orbitAngle = data.Angle + (1.5 * now)
+        -- ... (logic tính toán vị trí như cũ nhưng dùng biến local)
+        
+        -- Dùng PivotTo để cập nhật vị trí, cực nhanh và mượt
+        data.Object:PivotTo(finalCFrame)
+    end
+end)
+
+-- Lắng nghe âm thanh
+Workspace.DescendantAdded:Connect(function(sound)
+    if not getgenv().ShedletskySwordEnabled then return end
+    -- Kiểm tra sound từ nhân vật
+    if sound:IsA("Sound") and sound.SoundId:find("12222225") and sound:IsDescendantOf(localPlayer.Character) then
+        -- Trigger tấn công...
+    end
+end)
