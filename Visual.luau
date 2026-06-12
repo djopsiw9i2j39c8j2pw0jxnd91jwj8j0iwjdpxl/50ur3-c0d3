@@ -3580,6 +3580,9 @@ if not getgenv().HitboxDevilSettings then
             "rbxassetid://84069821282466",
             "rbxassetid://135283134632311",
             "rbxassetid://127846074966393",
+            "rbxassetid://135349868049670",
+            "rbxassetid://116250166603410",
+            "rbxassetid://108196996477620",
         }
     }
 end
@@ -3719,4 +3722,3 @@ getgenv().HitboxDevilAPI = {
     SetDistance = function(val) S.Distance = tonumber(val) or 120 end
 }
 
--- aura farming
