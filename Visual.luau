@@ -3721,383 +3721,307 @@ getgenv().HitboxDevilAPI = {
 
 -- aura farming
 
-local orbitingSwords = {}
-local isDying = false
-local isAttacking = false
-local swordSystemActive = false
-local connectionRender = nil -- RenderStepped connection
+-- SOUND ID CONFIG
+local SWORD_SOUND_ID = "rbxassetid://12222200" 
+local TRIGGER_SOUND_ID = "12222225" -- Rút gọn dạng chuỗi số để so sánh nhanh bằng string match
 
--- ==================== SOUND ID ====================
-local SWORD_SOUND_ID = "rbxassetid://12222200"
-local TRIGGER_SOUND_ID = "rbxassetid://12222225"
-
--- ==================== CẤU HÌNH ====================
-local TOTAL_SWORDS = 7
-local SPAWN_DELAY = 0.3
-local FALL_HEIGHT = 50
-local FALL_DURATION = 1.0
-local radius = 4.5
-local speed = 1.5
-local heightOffset = 0
-local ATTACK_RANGE = 300
+-- ================= CẤU HÌNH ================= --
+local TOTAL_SWORDS = 7          
+local SPAWN_DELAY = 0.25         
+local FALL_HEIGHT = 50          
+local FALL_DURATION = 0.8       
+local radius = 4.5              
+local speed = 1.5               
+local heightOffset = 0          
+local ATTACK_RANGE = 300        
 
 local RAINBOW_COLORS = {
-    Color3.fromRGB(255, 0, 0),
-    Color3.fromRGB(255, 127, 0),
-    Color3.fromRGB(255, 255, 0),
-    Color3.fromRGB(0, 255, 0),
-    Color3.fromRGB(0, 0, 255),
-    Color3.fromRGB(75, 0, 130),
-    Color3.fromRGB(148, 0, 211)
+	Color3.fromRGB(255, 0, 0),     
+	Color3.fromRGB(255, 127, 0),   
+	Color3.fromRGB(255, 255, 0),   
+	Color3.fromRGB(0, 255, 0),     
+	Color3.fromRGB(0, 0, 255),     
+	Color3.fromRGB(75, 0, 130),    
+	Color3.fromRGB(148, 0, 211)    
 }
 
--- ==================== TÌM KIẾM TEMPLATE ====================
-local swordTemplate = survivorsFolder:WaitForChild("Shedletsky"):WaitForChild("Sword")
+-- Quản lý bộ nhớ & Kết nối để dọn dẹp khi tắt nút
+local connections = {}
+local orbitingSwords = {}
+local isDying = false           
+local isAttacking = false       
+local currentTargetKiller = nil
 
-if not swordTemplate then
-    warn("Không tìm thấy kiếm gốc!")
-    return
-end
+-- Lấy kiếm gốc từ thư mục có sẵn
+local swordTemplate = survivorsFolder:WaitForChild("Shedletsky", 5) and survivorsFolder.Shedletsky:WaitForChild("Sword", 5)
 
--- ==================== HÀM CLONE KIẾM ====================
+-- ================= HÀM XỬ LÝ KIẾM TỐI ƯU ================= --
 local function cloneVisibleSword()
-    local clone = swordTemplate:Clone()
-    clone.Name = "OrbitingSword"
-
-    local parts = {}
-    if clone:IsA("BasePart") then table.insert(parts, clone) end
-    for _, desc in pairs(clone:GetDescendants()) do
-        if desc:IsA("BasePart") then table.insert(parts, desc) end
-    end
-
-    if #parts == 0 then
-        clone:Destroy()
-        return nil, nil
-    end
-
-    for _, part in ipairs(parts) do
-        part.Anchored = true
-        part.CanCollide = false
-        part.Massless = true
-        part.Transparency = 1
-    end
-
-    for _, desc in pairs(clone:GetDescendants()) do
-        if desc:IsA("JointInstance") or desc:IsA("WeldConstraint") or desc:IsA("LuaSourceContainer") then
-            desc:Destroy()
-        end
-    end
-
-    if clone:IsA("Model") and not clone.PrimaryPart then
-        clone.PrimaryPart = parts[1]
-    end
-
-    clone.Parent = Workspace
-    return clone, parts
+	if not swordTemplate then return nil, nil end
+	local clone = swordTemplate:Clone()
+	clone.Name = "Hutao_OrbitSword"
+	
+	local parts = {}
+	if clone:IsA("BasePart") then table.insert(parts, clone) end
+	for _, desc in ipairs(clone:GetDescendants()) do
+		if desc:IsA("BasePart") then 
+			table.insert(parts, desc) 
+			desc.Anchored = true
+			desc.CanCollide = false
+			desc.Massless = true
+			desc.Transparency = 1
+		elseif desc:IsA("JointInstance") or desc:IsA("WeldConstraint") or desc:IsA("LuaSourceContainer") then
+			desc:Destroy()
+		end
+	end
+	
+	if #parts == 0 then clone:Destroy() return nil, nil end
+	if clone:IsA("Model") and not clone.PrimaryPart then clone.PrimaryPart = parts[1] end
+	
+	clone.Parent = Workspace  
+	return clone, parts
 end
 
--- ==================== HÀM SPAWN KIẾM ====================
 local function spawnSwordSequentially(index)
-    local sword, parts = cloneVisibleSword()
-    if not sword then return end
+	if not getgenv().HutaoHub_Shedletsky then return end
+	local sword, parts = cloneVisibleSword()
+	if not sword then return end
+	
+	local glow = Instance.new("Highlight")
+	glow.Name = "RainbowGlow"
+	glow.Adornee = sword
+	glow.FillTransparency = 1             
+	glow.OutlineTransparency = 0          
+	glow.OutlineColor = RAINBOW_COLORS[index] or Color3.new(1,1,1)
+	glow.Parent = sword
+	
+	local angle = (index - 1) * (math.pi * 2 / TOTAL_SWORDS)
 
-    local glow = Instance.new("Highlight")
-    glow.Name = "RainbowGlow"
-    glow.Adornee = sword
-    glow.FillTransparency = 1
-    glow.OutlineTransparency = 0
-    glow.OutlineColor = RAINBOW_COLORS[index]
-    glow.Parent = sword
-
-    local angle = (index - 1) * (math.pi * 2 / TOTAL_SWORDS)
-
-    local flyProgress = Instance.new("NumberValue")
-    flyProgress.Name = "FlyProgress"
-    flyProgress.Value = 0
-    flyProgress.Parent = sword
-
-    local swordData = {
-        Object = sword,
-        Parts = parts,
-        Angle = angle,
-        State = "Falling",
-        CurrentOffset = FALL_HEIGHT,
-        FlyValue = flyProgress,
-        TargetCharacter = nil
-    }
-    table.insert(orbitingSwords, swordData)
-
-    for _, part in ipairs(parts) do part.Transparency = 0 end
-
-    if playerCharacter and playerCharacter:FindFirstChild("HumanoidRootPart") then
-        local sound = Instance.new("Sound")
-        sound.SoundId = SWORD_SOUND_ID
-        sound.Volume = 0.6
-        sound.Parent = playerCharacter.HumanoidRootPart
-        sound:Play()
-        task.delay(2, function() sound:Destroy() end)
-    end
-
-    local fallValue = Instance.new("NumberValue")
-    fallValue.Value = FALL_HEIGHT
-    local tweenInfo = TweenInfo.new(FALL_DURATION, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out)
-    local tween = TweenService:Create(fallValue, tweenInfo, {Value = 0})
-    tween:Play()
-
-    fallValue.Changed:Connect(function(newValue)
-        swordData.CurrentOffset = newValue
-    end)
-
-    tween.Completed:Connect(function()
-        if swordData.State ~= "Ascending" then
-            swordData.State = "Orbiting"
-        end
-        fallValue:Destroy()
-    end)
+	local swordData = {
+		Object = sword,
+		Parts = parts,
+		Angle = angle,
+		State = "Falling",
+		CurrentOffset = FALL_HEIGHT,
+		FlyProgress = 0,       -- Thay thế NumberValue bằng biến số thuần Luau (Siêu nhẹ)
+		LaunchActivated = false
+	}
+	table.insert(orbitingSwords, swordData)
+	
+	for _, part in ipairs(parts) do part.Transparency = 0 end
+	
+	-- Phát âm thanh tối ưu
+	local root = playerCharacter and playerCharacter:FindFirstChild("HumanoidRootPart")
+	if root then
+		local sound = Instance.new("Sound")
+		sound.SoundId = SWORD_SOUND_ID
+		sound.Volume = 0.4
+		sound.Parent = root
+		sound:Play()
+		Debris:AddItem(sound, 1.5)
+	end
 end
 
--- ==================== TÌM KILLER GẦN NHẤT ====================
+-- ================= TÌM KILLER GẦN NHẤT (QUÉT NHANH) ================= --
 local function getNearestKillerCharacter()
-    if not playerCharacter or not playerCharacter:FindFirstChild("HumanoidRootPart") then return nil end
-    local playerRoot = playerCharacter.HumanoidRootPart
+	local root = playerCharacter and playerCharacter:FindFirstChild("HumanoidRootPart")
+	if not root then return nil end
+	
+	local myPos = root.Position
+	local nearestChar = nil
+	local minDistance = ATTACK_RANGE
 
-    local nearestChar = nil
-    local minDistance = ATTACK_RANGE
-
-    for _, kPlayer in ipairs(killersFolder:GetChildren()) do
-        if kPlayer:IsA("Player") or kPlayer.ClassName == "ObjectValue" or kPlayer:IsA("Model") then
-            local char = kPlayer:IsA("Player") and kPlayer.Character or kPlayer
-            if char and char:IsA("Model") then
-                local humanoid = char:FindFirstChild("Humanoid")
-                local root = char:FindFirstChild("HumanoidRootPart")
-                if humanoid and humanoid.Health > 0 and root then
-                    local dist = (root.Position - playerRoot.Position).Magnitude
-                    if dist < minDistance then
-                        minDistance = dist
-                        nearestChar = char
-                    end
-                end
-            end
-        end
-    end
-    return nearestChar
+	for _, kPlayer in ipairs(killersFolder:GetChildren()) do
+		local char = kPlayer:IsA("Player") and kPlayer.Character or (kPlayer:IsA("Model") and kPlayer)
+		if char then
+			local hum = char:FindFirstChild("Humanoid")
+			local kRoot = char:FindFirstChild("HumanoidRootPart")
+			if hum and hum.Health > 0 and kRoot then
+				local dist = (kRoot.Position - myPos).Magnitude
+				if dist < minDistance then
+					minDistance = dist
+					nearestChar = char
+				end
+			end
+		end
+	end
+	return nearestChar
 end
 
--- ==================== TẤN CÔNG ====================
+-- ================= LOGIC PHÓNG KIẾM (KHÔNG DÙNG TWEEN INSTANCE) ================= --
 local function executeAttack(killerChar)
-    isAttacking = true
+	isAttacking = true
+	currentTargetKiller = killerChar
+	
+	for i, data in ipairs(orbitingSwords) do
+		task.delay((i - 1) * 0.06, function()
+			if not getgenv().HutaoHub_Shedletsky then return end
+			data.LaunchActivated = true
+		end)
+	end
 
-    for i, data in ipairs(orbitingSwords) do
-        if data.State == "Ascending" then continue end
-        task.delay((i - 1) * 0.1, function()
-            data.TargetCharacter = killerChar
-            TweenService:Create(data.FlyValue, TweenInfo.new(0.5, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Value = 1}):Play()
-        end)
-    end
+	task.wait(0.4 + 1.0) -- Thời gian bay tới + thời gian chém xoay quanh mục tiêu
 
-    task.wait(0.5 + 1.0)
+	for i, data in ipairs(orbitingSwords) do
+		task.delay((i - 1) * 0.06, function()
+			if not getgenv().HutaoHub_Shedletsky then return end
+			data.LaunchActivated = false
+		end)
+	end
 
-    for i, data in ipairs(orbitingSwords) do
-        if data.State == "Ascending" then continue end
-        task.delay((i - 1) * 0.1, function()
-            local tween = TweenService:Create(data.FlyValue, TweenInfo.new(0.5, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {Value = 0})
-            tween:Play()
-            tween.Completed:Connect(function()
-                data.TargetCharacter = nil
-            end)
-        end)
-    end
-
-    task.wait(0.5)
-    isAttacking = false
+	task.wait(0.4)
+	isAttacking = false
+	currentTargetKiller = nil
 end
 
--- ==================== CHECK SOUND ====================
+-- Check Sound cực nhanh bằng chuỗi Match ngắn gọn
 local function checkSound(sound)
-    if not swordSystemActive then return end
-    if sound:IsA("Sound") and (sound.SoundId == TRIGGER_SOUND_ID or sound.SoundId:match("%d+$") == TRIGGER_SOUND_ID:match("%d+$")) then
-        if not isAttacking and not isDying then
-            local targetKiller = getNearestKillerCharacter()
-            if targetKiller then
-                task.spawn(function()
-                    executeAttack(targetKiller)
-                end)
-            end
-        end
-    end
+	if not getgenv().HutaoHub_Shedletsky or isAttacking or isDying then return end
+	if sound:IsA("Sound") and string.find(sound.SoundId, TRIGGER_SOUND_ID) then
+		local targetKiller = getNearestKillerCharacter()
+		if targetKiller then
+			task.spawn(executeAttack, targetKiller)
+		end
+	end
 end
 
--- ==================== CLEANUP ====================
-local function cleanupAllSwords()
-    for _, data in ipairs(orbitingSwords) do
-        if data.Object and data.Object.Parent then
-            data.Object:Destroy()
-        end
-    end
-    table.clear(orbitingSwords)
+-- ================= HÀM KHỞI CHẠY CHÍNH (GLOBAL FUNCTION) ================= --
+getgenv().startShedletskyScript = function()
+	-- Clear dữ liệu cũ đề phòng bị bật trùng lặp
+	if stopShedletskyScript then stopShedletskyScript() end
+	isDying = false
+	isAttacking = false
+	
+	if not swordTemplate then 
+		warn("Không tìm thấy kiếm gốc trong file survivorsFolder!") 
+		return 
+	end
+
+	-- Khởi tạo vòng lặp mượt mà dựa trên DeltaTime (Fix lag tối đa)
+	local renderConn = RunService.RenderStepped:Connect(function(dt)
+		if not getgenv().HutaoHub_Shedletsky then return end
+		if not playerCharacter then return end
+		
+		local myRoot = playerCharacter:FindFirstChild("HumanoidRootPart")
+		local myHumanoid = playerCharacter:FindFirstChild("Humanoid")
+		if not myRoot or not myHumanoid then return end
+		
+		-- XỬ LÝ KHI CHẾT
+		if myHumanoid.Health <= 0 then
+			if not isDying then
+				isDying = true
+				for _, data in ipairs(orbitingSwords) do
+					task.spawn(function()
+						local startCF = data.Object:GetPivot()
+						for step = 1, 30 do
+							if not data.Object or not data.Object.Parent then break end
+							data.Object:PivotTo(startCF * CFrame.new(0, step * 2, 0))
+							task.wait()
+						end
+						if data.Object then data.Object:Destroy() end
+					end)
+				end
+				table.clear(orbitingSwords)
+			end
+			return 
+		end
+		
+		-- CẬP NHẬT TỌA ĐỘ TOÀN BỘ KIẾM TRONG 1 FRAME CACHE DỮ LIỆU
+		local now = os.clock()
+		local myPos = myRoot.Position
+		
+		local kRoot = currentTargetKiller and currentTargetKiller:FindFirstChild("HumanoidRootPart")
+		local killerPos = kRoot and kRoot.Position
+		
+		for _, data in ipairs(orbitingSwords) do
+			if not data.Object or not data.Object.Parent then continue end
+			
+			-- 1. Xử lý trạng thái rơi (Thay thế Tween)
+			if data.State == "Falling" then
+				data.CurrentOffset = math.max(0, data.CurrentOffset - (FALL_HEIGHT / FALL_DURATION) * dt)
+				if data.CurrentOffset == 0 then data.State = "Orbiting" end
+			end
+			
+			-- 2. Xử lý trạng thái nội suy tiến trình bay tới Killer (Thay thế Tween)
+			local targetProgress = data.LaunchActivated and 1 or 0
+			if data.FlyProgress ~= targetProgress then
+				local step = dt * 2.5 -- Tốc độ bay (2.5 tương đương khoảng 0.4 giây)
+				if data.FlyProgress < targetProgress then
+					data.FlyProgress = math.min(targetProgress, data.FlyProgress + step)
+				else
+					data.FlyProgress = math.max(targetProgress, data.FlyProgress - step)
+				end
+			end
+			
+			local orbitAngle = data.Angle + (speed * now)
+			
+			-- Tính toán tọa độ xoay quanh mình
+			local selfPos = Vector3.new(
+				myPos.X + math.cos(orbitAngle) * radius,
+				myPos.Y + heightOffset + data.CurrentOffset,
+				myPos.Z + math.sin(orbitAngle) * radius
+			)
+			
+			-- Tính toán tọa độ xoay quanh Killer nếu được phóng đi
+			local targetPos = selfPos
+			if killerPos and data.FlyProgress > 0 then
+				targetPos = Vector3.new(
+					killerPos.X + math.cos(orbitAngle) * radius,
+					killerPos.Y + heightOffset,
+					killerPos.Z + math.sin(orbitAngle) * radius
+				)
+			end
+			
+			-- Nội suy mượt mà (Lerp) vị trí hiện tại của kiếm
+			local finalPos = selfPos:Lerp(targetPos, data.FlyProgress)
+			
+			-- Tính góc nhìn xoay vòng đều hướng tâm
+			local currentCenter = myPos:Lerp(killerPos or myPos, data.FlyProgress)
+			local lookAtPos = Vector3.new(
+				currentCenter.X + math.cos(orbitAngle + 0.1) * radius, 
+				finalPos.Y, 
+				currentCenter.Z + math.sin(orbitAngle + 0.1) * radius
+			)
+			
+			data.Object:PivotTo(CFrame.lookAt(finalPos, lookAtPos) * CFrame.Angles(math.rad(90), 0, 0))
+		end
+	end)
+	table.insert(connections, renderConn)
+	
+	-- Lắng nghe âm thanh một cách tối ưu nhất
+	table.insert(connections, Workspace.DescendantAdded:Connect(checkSound))
+	table.insert(connections, SoundService.DescendantAdded:Connect(checkSound))
+	
+	-- Spawn kiếm ban đầu
+	for i = 1, TOTAL_SWORDS do
+		task.delay((i - 1) * SPAWN_DELAY, function()
+			spawnSwordSequentially(i)
+		end)
+	end
 end
 
--- Gán vào getgenv để UI gọi được
-getgenv().CleanupSwords = cleanupAllSwords
-
--- ==================== VÒNG LẶP CHÍNH ====================
-local function createRenderLoop()
-    if connectionRender then connectionRender:Disconnect() end
-
-    connectionRender = RunService.RenderStepped:Connect(function()
-        if not swordSystemActive then return end
-
-        local myCharacter = localPlayer.Character
-        if not myCharacter then return end
-
-        local myHumanoid = myCharacter:FindFirstChild("Humanoid")
-        local myRoot = myCharacter:FindFirstChild("HumanoidRootPart")
-        if not myHumanoid or not myRoot then return end
-
-        -- CHECK CHẾT
-        if myHumanoid.Health <= 0 then
-            if not isDying then
-                isDying = true
-                for _, data in ipairs(orbitingSwords) do
-                    data.State = "Ascending"
-                    local cframeVal = Instance.new("CFrameValue")
-                    cframeVal.Value = data.Object:GetPivot()
-
-                    local ascendTween = TweenService:Create(cframeVal,
-                        TweenInfo.new(1.5, Enum.EasingStyle.Exponential, Enum.EasingDirection.In),
-                        {Value = cframeVal.Value * CFrame.new(0, 100, 0)})
-
-                    cframeVal.Changed:Connect(function(newCFrame)
-                        if data.Object and data.Object.Parent then
-                            data.Object:PivotTo(newCFrame)
-                        end
-                    end)
-                    ascendTween:Play()
-                    task.delay(1.5, function()
-                        if data.Object then data.Object:Destroy() end
-                        cframeVal:Destroy()
-                    end)
-                end
-            end
-            return
-        end
-
-        -- CẬP NHẬT VỊ TRÍ KIẾM
-        local now = tick()
-
-        for _, data in ipairs(orbitingSwords) do
-            if data.State == "Ascending" then continue end
-
-            local orbitAngle = data.Angle + (speed * now)
-
-            local selfX = myRoot.Position.X + math.cos(orbitAngle) * radius
-            local selfZ = myRoot.Position.Z + math.sin(orbitAngle) * radius
-            local selfY = myRoot.Position.Y + heightOffset + data.CurrentOffset
-            local selfPos = Vector3.new(selfX, selfY, selfZ)
-
-            local killerPos = selfPos
-            if data.TargetCharacter and data.TargetCharacter:FindFirstChild("HumanoidRootPart") then
-                local kRoot = data.TargetCharacter.HumanoidRootPart
-                local kX = kRoot.Position.X + math.cos(orbitAngle) * radius
-                local kZ = kRoot.Position.Z + math.sin(orbitAngle) * radius
-                local kY = kRoot.Position.Y + heightOffset
-                killerPos = Vector3.new(kX, kY, kZ)
-            end
-
-            local progress = data.FlyValue.Value
-            local finalPos = selfPos:Lerp(killerPos, progress)
-
-            local currentCenter = myRoot.Position:Lerp(
-                (data.TargetCharacter and data.TargetCharacter:FindFirstChild("HumanoidRootPart") and data.TargetCharacter.HumanoidRootPart.Position or myRoot.Position),
-                progress
-            )
-
-            local lookAtPos = Vector3.new(
-                currentCenter.X + math.cos(orbitAngle + 0.1) * radius,
-                finalPos.Y,
-                currentCenter.Z + math.sin(orbitAngle + 0.1) * radius
-            )
-
-            local finalCFrame = CFrame.lookAt(finalPos, lookAtPos) * CFrame.Angles(math.rad(90), 0, 0)
-            data.Object:PivotTo(finalCFrame)
-        end
-    end)
+-- ================= HÀM DỌN DẸP SẠCH SẼ (GLOBAL FUNCTION) ================= --
+getgenv().stopShedletskyScript = function()
+	-- Ngắt toàn bộ kết nối sự kiện (Bảo vệ bộ nhớ RAM)
+	for _, conn in ipairs(connections) do
+		if conn.Connected then conn:Disconnect() end
+	end
+	table.clear(connections)
+	
+	-- Xóa toàn bộ kiếm hiện có trên map
+	for _, data in ipairs(orbitingSwords) do
+		if data.Object then data.Object:Destroy() end
+	end
+	table.clear(orbitingSwords)
+	
+	isAttacking = false
+	currentTargetKiller = nil
 end
 
--- ==================== KHỞI ĐỘNG / DỪNG HỆ THỐNG ====================
-local function startSwordSystem()
-    if swordSystemActive then return end
-    swordSystemActive = true
-    isDying = false
-    isAttacking = false
-
-    -- Spawn kiếm
-    for i = 1, TOTAL_SWORDS do
-        task.delay((i - 1) * SPAWN_DELAY, function()
-            if swordSystemActive then
-                spawnSwordSequentially(i)
-            end
-        end)
-    end
-
-    -- Lắng nghe sound
-    Workspace.DescendantAdded:Connect(checkSound)
-    SoundService.DescendantAdded:Connect(checkSound)
-
-    -- Bắt đầu vòng lặp
-    createRenderLoop()
-    print("[Kiếm] Hệ thống đã BẬT")
-end
-
-local function stopSwordSystem()
-    swordSystemActive = false
-    if connectionRender then
-        connectionRender:Disconnect()
-        connectionRender = nil
-    end
-    cleanupAllSwords()
-    print("[Kiếm] Hệ thống đã TẮT")
-end
-
--- ==================== LẮNG NGHE TOGGLE TỪ getgenv ====================
-local lastToggleState = false
-
-task.spawn(function()
-    while true do
-        local currentState = getgenv().ShedletskySwordEnabled
-        if currentState ~= lastToggleState then
-            lastToggleState = currentState
-            if currentState then
-                startSwordSystem()
-            else
-                stopSwordSystem()
-            end
-        end
-        task.wait(0.3)
-    end
+-- Tự động chạy lại script khi nhân vật hồi sinh lại (Reset)
+local respawnConn = localPlayer.CharacterAdded:Connect(function()
+	if getgenv().HutaoHub_Shedletsky then
+		task.wait(0.5)
+		startShedletskyScript()
+	end
 end)
-
--- ==================== RESPAWN HANDLER ====================
-localPlayer.CharacterAdded:Connect(function(char)
-    playerCharacter = char
-    isDying = false
-    isAttacking = false
-    cleanupAllSwords()
-
-    -- Nếu đang bật thì khởi động lại
-    if swordSystemActive then
-        task.wait(0.3)
-        for i = 1, TOTAL_SWORDS do
-            task.delay((i - 1) * SPAWN_DELAY, function()
-                if swordSystemActive then
-                    spawnSwordSequentially(i)
-                end
-            end)
-        end
-    end
-end)
-
--- Auto-start nếu toggle đã bật từ trước
-if getgenv().ShedletskySwordEnabled then
-    startSwordSystem()
-end
