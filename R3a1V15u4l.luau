@@ -58,9 +58,6 @@ local speed = 1.5
 local heightOffset = 0          
 local ATTACK_RANGE = 300        
 
--- ================= TỐI ƯU: GIẢM TẦN SUẤT RENDER ================= --
-local TARGET_FPS = 30  -- Giảm từ 60 xuống 30 FPS cho orbit (vẫn mượt mà nhẹ hơn 50%)
-
 local RAINBOW_COLORS = {
 	Color3.fromRGB(255, 0, 0),     
 	Color3.fromRGB(255, 127, 0),   
@@ -77,16 +74,19 @@ local isAttacking = false
 local auraConnections = {} 
 local isAuraActive = false 
 local isCurrentlyShedletsky = false 
-local soundListenerConn = nil -- Tối ưu: tách riêng sound connection để dễ quản lý
-
--- ================= TỐI ƯU: CACHE DESCENDANTS COUNT ================= --
+local soundListenerConn = nil
 local templateDescendantsCount = 0
 
 -- ================= HÀM DỌN DẸP KIẾM NHANH ================= --
 local function clearSwords()
 	for _, data in ipairs(orbitingSwords) do
+		if data.FallTween then 
+			data.FallTween:Cancel() 
+		end
+		if data.FlyTween then 
+			data.FlyTween:Cancel() 
+		end
 		if data.Object then 
-			-- Hủy Highlight trước
 			local glow = data.Object:FindFirstChild("RainbowGlow")
 			if glow then glow:Destroy() end
 			data.Object:Destroy() 
@@ -97,13 +97,11 @@ local function clearSwords()
 	table.clear(orbitingSwords)
 end
 
--- ================= HÀM XỬ LÝ KIẾM (TỐI ƯU) ================= --
+-- ================= HÀM XỬ LÝ KIẾM ================= --
 local function cloneVisibleSword()
 	if not swordTemplate then return nil, nil end 
 	
 	local clone = swordTemplate:Clone()
-	
-	-- TỐI ƯU: Dùng cache count
 	local cloneCount = #clone:GetDescendants()
 	
 	if cloneCount < templateDescendantsCount or cloneCount == 0 then
@@ -142,7 +140,6 @@ local function cloneVisibleSword()
 		part.Transparency = 1 
 	end
 	
-	-- TỐI ƯU: Dùng vòng for i thay vì pairs cho GetDescendants
 	local descendants = clone:GetDescendants()
 	for i = 1, #descendants do
 		local desc = descendants[i]
@@ -171,7 +168,6 @@ local function spawnSwordSequentially(index)
 		return 
 	end
 	
-	-- TỐI ƯU: Dùng Beam hoặc Trail thay Highlight (nhẹ hơn)
 	local glow = Instance.new("Highlight")
 	glow.Name = "RainbowGlow"
 	glow.Adornee = sword
@@ -195,6 +191,8 @@ local function spawnSwordSequentially(index)
 		CurrentOffset = FALL_HEIGHT,
 		FlyValue = flyProgress,
 		FallValue = nil,
+		FallTween = nil,
+		FlyTween = nil,
 		TargetCharacter = nil 
 	}
 	table.insert(orbitingSwords, swordData)
@@ -213,24 +211,28 @@ local function spawnSwordSequentially(index)
 		task.delay(2, function() sound:Destroy() end)
 	end
 	
+	-- ===== FALL TWEEN ===== --
 	local fallValue = Instance.new("NumberValue")
 	fallValue.Value = FALL_HEIGHT
 	swordData.FallValue = fallValue
 	
 	local tweenInfo = TweenInfo.new(FALL_DURATION, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out)
-	local tween = TweenService:Create(fallValue, tweenInfo, {Value = 0})  
-	tween:Play()
+	local fallTween = TweenService:Create(fallValue, tweenInfo, {Value = 0})  
+	swordData.FallTween = fallTween
 	
 	fallValue.Changed:Connect(function(newValue)
 		swordData.CurrentOffset = newValue
 	end)
 	
-	tween.Completed:Connect(function()
+	fallTween:Play()
+	
+	fallTween.Completed:Connect(function()
 		if swordData.State ~= "Ascending" then
 			swordData.State = "Orbiting"
 		end
 		fallValue:Destroy()
 		swordData.FallValue = nil
+		swordData.FallTween = nil
 	end)
 end
 
@@ -243,7 +245,6 @@ local function getNearestKillerCharacter()
 	local nearestChar = nil
 	local minDistance = ATTACK_RANGE
 	
-	-- TỐI ƯU: Cache GetChildren
 	local killers = killersFolder:GetChildren()
 	for i = 1, #killers do
 		local kPlayer = killers[i]
@@ -265,30 +266,48 @@ local function getNearestKillerCharacter()
 	return nearestChar
 end
 
--- ================= HÀM ĐIỀU KHIỂN PHÓNG / THU KIẾM (TỐI ƯU) ================= --
+-- ================= HÀM ĐIỀU KHIỂN PHÓNG / THU KIẾM ================= --
 local function executeAttack(killerChar)
 	isAttacking = true
 	
-	local swords = orbitingSwords -- Cache
+	local swords = orbitingSwords
 	for i = 1, #swords do
 		local data = swords[i]
 		if data.State == "Ascending" then continue end
+		
 		task.delay((i - 1) * 0.1, function() 
 			data.TargetCharacter = killerChar
-			TweenService:Create(data.FlyValue, TweenInfo.new(0.5, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Value = 1}):Play()
+			
+			if data.FlyTween then 
+				data.FlyTween:Cancel() 
+			end
+			
+			data.FlyTween = TweenService:Create(data.FlyValue, 
+				TweenInfo.new(0.5, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), 
+				{Value = 1})
+			data.FlyTween:Play()
 		end)
 	end
 
-	task.wait(3.5) -- Gộp 0.5 + 3.0
+	task.wait(3.5)
 
 	for i = 1, #swords do
 		local data = swords[i]
 		if data.State == "Ascending" then continue end
+		
 		task.delay((i - 1) * 0.1, function()
-			local tween = TweenService:Create(data.FlyValue, TweenInfo.new(0.5, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {Value = 0})
-			tween:Play()
-			tween.Completed:Connect(function()
+			if data.FlyTween then 
+				data.FlyTween:Cancel() 
+			end
+			
+			data.FlyTween = TweenService:Create(data.FlyValue, 
+				TweenInfo.new(0.5, Enum.EasingStyle.Quad, Enum.EasingDirection.In), 
+				{Value = 0})
+			data.FlyTween:Play()
+			
+			data.FlyTween.Completed:Connect(function()
 				data.TargetCharacter = nil 
+				data.FlyTween = nil
 			end)
 		end)
 	end
@@ -297,7 +316,7 @@ local function executeAttack(killerChar)
 	isAttacking = false
 end
 
--- ================= HỆ THỐNG CHECK SOUND KÍCH HOẠT (TỐI ƯU) ================= --
+-- ================= HỆ THỐNG CHECK SOUND KÍCH HOẠT ================= --
 local function disconnectSoundListener()
 	if soundListenerConn then
 		soundListenerConn:Disconnect()
@@ -306,14 +325,13 @@ local function disconnectSoundListener()
 end
 
 local function connectSoundListener(character)
-	disconnectSoundListener() -- Hủy cũ trước
+	disconnectSoundListener()
 	
 	if not character then return end
 	
-	-- Chỉ lắng nghe sound được thêm vào CHÍNH character của mình
 	soundListenerConn = character.DescendantAdded:Connect(function(descendant)
 		if not descendant:IsA("Sound") then return end
-		if isAttacking or isDying or not isCurrentlyShedletsky then return end -- Check sớm
+		if isAttacking or isDying or not isCurrentlyShedletsky then return end
 		
 		local soundDigits = descendant.SoundId:match("%d+$")
 		
@@ -346,10 +364,8 @@ local function cleanUpAura()
 	isAttacking = false
 end
 
--- ================= TỐI ƯU: TÁCH RIÊNG ORBIT UPDATE ================= --
-local lastOrbitUpdate = 0
-local function updateOrbit(deltaTime)
-	-- TỐI ƯU: Cache local references
+-- ================= FIX: ORBIT DÙNG tick() NHƯ BẢN GỐC ================= --
+local function updateOrbit()
 	local myCharacter = localPlayer.Character
 	if not myCharacter then return end
 	
@@ -357,7 +373,6 @@ local function updateOrbit(deltaTime)
 	local myRoot = myCharacter:FindFirstChild("HumanoidRootPart")
 	if not myHumanoid or not myRoot then return end
 	
-	-- Check death
 	if myHumanoid.Health <= 0 then
 		if not isDying then
 			isDying = true
@@ -387,19 +402,17 @@ local function updateOrbit(deltaTime)
 		return
 	end
 	
-	-- TỐI ƯU: Dùng deltaTime để animation mượt không phụ thuộc FPS
-	local frameSpeed = speed * deltaTime * TARGET_FPS
+	-- ===== FIX: Dùng tick() như bản gốc, không cộng dồn ===== --
+	local now = tick()
 	
 	local swords = orbitingSwords
-	local swordCount = #swords
-	
-	for i = 1, swordCount do
+	for i = 1, #swords do
 		local data = swords[i]
 		if data.State == "Ascending" then continue end 
 		
-		-- TỐI ƯU: Cập nhật góc dựa trên deltaTime
-		data.Angle = data.Angle + frameSpeed
-		local orbitAngle = data.Angle
+		-- FIX BUG 1 & 2: orbitAngle = data.Angle + (speed * now)
+		-- data.Angle cố định (khởi tạo 1 lần), now là thời gian tuyệt đối → tất cả kiếm đồng bộ
+		local orbitAngle = data.Angle + (speed * now)
 		
 		local selfX = myRoot.Position.X + math.cos(orbitAngle) * radius
 		local selfZ = myRoot.Position.Z + math.sin(orbitAngle) * radius
@@ -407,23 +420,19 @@ local function updateOrbit(deltaTime)
 		local selfPos = Vector3.new(selfX, selfY, selfZ)
 		
 		local killerPos = selfPos 
-		local targetChar = data.TargetCharacter
-		if targetChar then
-			local kRoot = targetChar:FindFirstChild("HumanoidRootPart")
-			if kRoot then
-				local kX = kRoot.Position.X + math.cos(orbitAngle) * radius
-				local kZ = kRoot.Position.Z + math.sin(orbitAngle) * radius
-				local kY = kRoot.Position.Y + heightOffset
-				killerPos = Vector3.new(kX, kY, kZ)
-			end
+		if data.TargetCharacter and data.TargetCharacter:FindFirstChild("HumanoidRootPart") then
+			local kRoot = data.TargetCharacter.HumanoidRootPart
+			local kX = kRoot.Position.X + math.cos(orbitAngle) * radius
+			local kZ = kRoot.Position.Z + math.sin(orbitAngle) * radius
+			local kY = kRoot.Position.Y + heightOffset
+			killerPos = Vector3.new(kX, kY, kZ)
 		end
 		
 		local progress = data.FlyValue.Value
 		local finalPos = selfPos:Lerp(killerPos, progress)
 		
-		local targetRoot = targetChar and targetChar:FindFirstChild("HumanoidRootPart")
 		local currentCenter = myRoot.Position:Lerp(
-			(targetRoot and targetRoot.Position or myRoot.Position), 
+			(data.TargetCharacter and data.TargetCharacter:FindFirstChild("HumanoidRootPart") and data.TargetCharacter.HumanoidRootPart.Position or myRoot.Position), 
 			progress
 		)
 		
@@ -438,14 +447,12 @@ local function updateOrbit(deltaTime)
 	end
 end
 
--- ================= TỐI ƯU: DÙNG RunService.Heartbeat THAY VÌ RenderStepped ================= --
--- Heartbeat chạy sau physics step, nhẹ hơn RenderStepped
+-- ================= START AURA ================= --
 local function startAura()
 	cleanUpAura() 
 	isAuraActive = true
 	
 	task.spawn(function()
-		-- ===== FIX BUG 2: TÌM ĐÚNG SHEDLETSKY CỦA LOCALPLAYER ===== --
 		if not swordTemplate then
 			local myChar = localPlayer.Character or localPlayer.CharacterAdded:Wait()
 			
@@ -458,12 +465,10 @@ local function startAura()
 				end
 			end
 			
-			-- TỐI ƯU: Cache descendants count
 			if swordTemplate then
 				templateDescendantsCount = #swordTemplate:GetDescendants()
 			end
 		end
-		-- ===== HẾT FIX BUG 2 =====
 		
 		if not swordTemplate then
 			warn("Không tìm thấy kiếm gốc!")
@@ -472,12 +477,10 @@ local function startAura()
 		
 		if not isAuraActive then return end 
 		
-		-- Kết nối sound listener cho character hiện tại
 		if localPlayer.Character then
 			connectSoundListener(localPlayer.Character)
 		end
 		
-		-- CharacterAdded handler
 		table.insert(auraConnections, localPlayer.CharacterAdded:Connect(function(newChar)
 			isCurrentlyShedletsky = false 
 			isDying = false
@@ -486,8 +489,8 @@ local function startAura()
 			connectSoundListener(newChar)
 		end))
 		
-		-- ===== TỐI ƯU: Heartbeat thay vì RenderStepped ===== --
-		table.insert(auraConnections, RunService.Heartbeat:Connect(function(deltaTime)
+		-- Dùng RenderStepped cho orbit mượt (như bản gốc)
+		table.insert(auraConnections, RunService.RenderStepped:Connect(function()
 			if not isAuraActive then return end
 			
 			local myCharacter = localPlayer.Character  
@@ -521,8 +524,7 @@ local function startAura()
 
 			if not isCurrentlyShedletsky then return end
 			
-			-- Update orbit với deltaTime
-			updateOrbit(deltaTime)
+			updateOrbit()
 		end))
 	end)
 end
