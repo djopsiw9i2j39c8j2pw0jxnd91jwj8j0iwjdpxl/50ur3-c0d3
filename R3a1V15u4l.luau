@@ -362,9 +362,27 @@ local function cleanUpAura()
 	
 	isDying = false
 	isAttacking = false
+	
+	-- ===== FIX: Reset swordTemplate khi Stop để lần Start sau tìm lại ===== --
+	swordTemplate = nil
+	templateDescendantsCount = 0
 end
 
--- ================= FIX: ORBIT DÙNG tick() NHƯ BẢN GỐC ================= --
+-- ================= FIX: HÀM TÌM SWORD TEMPLATE TỪ CHARACTER ================= --
+local function findSwordTemplate(character)
+	if not character then return false end
+	if character.Name ~= "Shedletsky" then return false end
+	
+	local sword = character:WaitForChild("Sword", 5)
+	if sword then
+		swordTemplate = sword
+		templateDescendantsCount = #swordTemplate:GetDescendants()
+		return true
+	end
+	return false
+end
+
+-- ================= ORBIT UPDATE ================= --
 local function updateOrbit()
 	local myCharacter = localPlayer.Character
 	if not myCharacter then return end
@@ -402,7 +420,6 @@ local function updateOrbit()
 		return
 	end
 	
-	-- ===== FIX: Dùng tick() như bản gốc, không cộng dồn ===== --
 	local now = tick()
 	
 	local swords = orbitingSwords
@@ -410,8 +427,6 @@ local function updateOrbit()
 		local data = swords[i]
 		if data.State == "Ascending" then continue end 
 		
-		-- FIX BUG 1 & 2: orbitAngle = data.Angle + (speed * now)
-		-- data.Angle cố định (khởi tạo 1 lần), now là thời gian tuyệt đối → tất cả kiếm đồng bộ
 		local orbitAngle = data.Angle + (speed * now)
 		
 		local selfX = myRoot.Position.X + math.cos(orbitAngle) * radius
@@ -447,49 +462,53 @@ local function updateOrbit()
 	end
 end
 
--- ================= START AURA ================= --
+-- ================= START AURA (ĐÃ FIX) ================= --
 local function startAura()
 	cleanUpAura() 
 	isAuraActive = true
 	
 	task.spawn(function()
+		-- ===== FIX: Luôn tìm swordTemplate khi Start (không cache cứng) ===== --
+		local myChar = localPlayer.Character
+		
+		-- Nếu đang trong game và là Shedletsky, tìm sword ngay
+		if myChar and myChar.Name == "Shedletsky" then
+			findSwordTemplate(myChar)
+		end
+		
+		-- Nếu chưa tìm thấy (chưa vào game hoặc chưa phải Shedletsky), chờ CharacterAdded
 		if not swordTemplate then
-			local myChar = localPlayer.Character or localPlayer.CharacterAdded:Wait()
-			
-			if myChar.Name == "Shedletsky" then
-				swordTemplate = myChar:WaitForChild("Sword", 5)
-			else
-				local newChar = localPlayer.CharacterAdded:Wait()
-				if newChar.Name == "Shedletsky" then
-					swordTemplate = newChar:WaitForChild("Sword", 5)
-				end
-			end
-			
-			if swordTemplate then
-				templateDescendantsCount = #swordTemplate:GetDescendants()
-			end
+			local newChar = localPlayer.CharacterAdded:Wait()
+			findSwordTemplate(newChar)
 		end
 		
 		if not swordTemplate then
-			warn("Không tìm thấy kiếm gốc!")
+			warn("Không tìm thấy kiếm gốc! Hãy chắc chắn bạn đang là Shedletsky.")
+			isAuraActive = false
 			return
 		end
 		
 		if not isAuraActive then return end 
 		
+		-- Kết nối sound listener cho character hiện tại
 		if localPlayer.Character then
 			connectSoundListener(localPlayer.Character)
 		end
 		
+		-- CharacterAdded handler: KHÔNG reset isCurrentlyShedletsky ở đây nữa
+		-- vì RenderStepped sẽ tự phát hiện và xử lý chuyển đổi nhân vật
 		table.insert(auraConnections, localPlayer.CharacterAdded:Connect(function(newChar)
-			isCurrentlyShedletsky = false 
+			disconnectSoundListener()
+			clearSwords()
 			isDying = false
 			isAttacking = false
-			clearSwords()
-			connectSoundListener(newChar)
+			
+			-- ===== FIX: Tìm lại swordTemplate từ character mới ===== --
+			-- KHÔNG reset isCurrentlyShedletsky, để RenderStepped tự xử lý
+			-- Nhưng clear swords để tránh bug
 		end))
 		
-		-- Dùng RenderStepped cho orbit mượt (như bản gốc)
+		-- RenderStepped cho orbit
 		table.insert(auraConnections, RunService.RenderStepped:Connect(function()
 			if not isAuraActive then return end
 			
@@ -498,27 +517,37 @@ local function startAura()
 			
 			local isShedletskyNow = (myCharacter.Name == "Shedletsky")
 			
+			-- Phát hiện chuyển ĐẾN Shedletsky
 			if isShedletskyNow and not isCurrentlyShedletsky then
 				isCurrentlyShedletsky = true
 				isDying = false
 				isAttacking = false
 				clearSwords()
 				
-				task.spawn(function()
-					task.wait(1)
-					if not isCurrentlyShedletsky or not isAuraActive then return end 
-					
-					for i = 1, TOTAL_SWORDS do
-						task.delay((i - 1) * SPAWN_DELAY, function()
-							if isAuraActive and isCurrentlyShedletsky then
-								spawnSwordSequentially(i)
-							end
-						end)
-					end
-				end)
+				-- ===== FIX: Tìm lại swordTemplate ===== --
+				findSwordTemplate(myCharacter)
 				
+				if swordTemplate then
+					connectSoundListener(myCharacter)
+					
+					task.spawn(function()
+						task.wait(1)
+						if not isCurrentlyShedletsky or not isAuraActive then return end 
+						
+						for i = 1, TOTAL_SWORDS do
+							task.delay((i - 1) * SPAWN_DELAY, function()
+								if isAuraActive and isCurrentlyShedletsky then
+									spawnSwordSequentially(i)
+								end
+							end)
+						end
+					end)
+				end
+				
+			-- Phát hiện chuyển KHỎI Shedletsky
 			elseif not isShedletskyNow and isCurrentlyShedletsky then
 				isCurrentlyShedletsky = false
+				disconnectSoundListener()
 				clearSwords()
 			end
 
