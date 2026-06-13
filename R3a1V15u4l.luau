@@ -270,10 +270,15 @@ local function executeAttack(killerChar)
 	isAttacking = false
 end
 
--- ================= HỆ THỐNG CHECK SOUND KÍCH HOẠT ================= --
-local function checkSound(sound)
-	if sound:IsA("Sound") then
-		local soundDigits = sound.SoundId:match("%d+$")
+-- ================= HỆ THỐNG CHECK SOUND KÍCH HOẠT (ĐÃ FIX BUG 1 + TỐI ƯU) ================= --
+local function connectSoundListener(character)
+	if not character then return end
+	
+	-- Chỉ lắng nghe sound được thêm vào CHÍNH character của mình
+	local conn = character.DescendantAdded:Connect(function(descendant)
+		if not descendant:IsA("Sound") then return end
+		
+		local soundDigits = descendant.SoundId:match("%d+$")
 		
 		if soundDigits and TRIGGER_SOUND_IDS[soundDigits] then
 			if not isAttacking and not isDying and isCurrentlyShedletsky then
@@ -285,7 +290,9 @@ local function checkSound(sound)
 				end
 			end
 		end
-	end
+	end)
+	
+	table.insert(auraConnections, conn)
 end
 
 -- ================= HÀM QUẢN LÝ BẬT / TẮT AURA ================= --
@@ -309,12 +316,24 @@ local function startAura()
 	isAuraActive = true
 	
 	task.spawn(function()
+		-- ===== FIX BUG 2: TÌM ĐÚNG SHEDLETSKY CỦA LOCALPLAYER ===== --
 		if not swordTemplate then
-			local shedletsky = survivorsFolder:WaitForChild("Shedletsky", 5)
-			if shedletsky then
-				swordTemplate = shedletsky:WaitForChild("Sword", 5)
+			-- Chờ character của mình load
+			local myChar = localPlayer.Character or localPlayer.CharacterAdded:Wait()
+			
+			-- Kiểm tra character hiện tại có phải Shedletsky không
+			if myChar.Name == "Shedletsky" then
+				-- Tìm Sword TRONG character của mình (không phải của người khác)
+				swordTemplate = myChar:WaitForChild("Sword", 5)
+			else
+				-- Nếu hiện tại không phải Shedletsky, chờ CharacterAdded
+				local newChar = localPlayer.CharacterAdded:Wait()
+				if newChar.Name == "Shedletsky" then
+					swordTemplate = newChar:WaitForChild("Sword", 5)
+				end
 			end
 		end
+		-- ===== HẾT FIX BUG 2 =====
 		
 		if not swordTemplate then
 			warn("Không tìm thấy kiếm gốc!")
@@ -323,14 +342,21 @@ local function startAura()
 		
 		if not isAuraActive then return end 
 		
-		table.insert(auraConnections, Workspace.DescendantAdded:Connect(checkSound))
-		table.insert(auraConnections, SoundService.DescendantAdded:Connect(checkSound))
+		-- ===== FIX + TỐI ƯU CHECK SOUND ===== --
+		-- Kết nối sound listener cho character hiện tại
+		if localPlayer.Character then
+			connectSoundListener(localPlayer.Character)
+		end
+		-- ===== HẾT FIX + TỐI ƯU =====
 		
-		table.insert(auraConnections, localPlayer.CharacterAdded:Connect(function()
+		table.insert(auraConnections, localPlayer.CharacterAdded:Connect(function(newChar)
 			isCurrentlyShedletsky = false 
 			isDying = false
 			isAttacking = false
 			clearSwords()
+			
+			-- Kết nối lại sound listener cho character mới
+			connectSoundListener(newChar)
 		end))
 		
 		table.insert(auraConnections, RunService.RenderStepped:Connect(function()  
