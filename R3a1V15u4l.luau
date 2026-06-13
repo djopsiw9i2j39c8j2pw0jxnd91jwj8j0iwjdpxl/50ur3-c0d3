@@ -33,122 +33,411 @@ end)
 
 Camera = Workspace.CurrentCamera
 
--- File Thư Viện ESP Logic (Cho lên GitHub/Pastebin Raw)
-if getgenv().ESP_API_LOADED then return end
-getgenv().ESP_API_LOADED = true
+-- KHỞI TẠO BIẾN GLOBAL ĐỂ CHỨA HÀM
+getgenv().HutaoAuraSword = {}
 
-getgenv().ESP_API = {}
+-- BỎ KHOẢNG ĐỢI YIELD Ở NGOÀI CÙNG, ĐẶT TEMPLATE LÀ NIL ĐỂ HUB LOAD MƯỢT
+local swordTemplate = nil 
 
--- [5] Kích cỡ Text cố định là 10 theo yêu cầu
-local TEXT_SIZE = 10 
+-- SOUND ID CONFIG
+local SWORD_SOUND_ID = "rbxassetid://12222200" 
 
--- Hàm khởi tạo ESP cho 1 mục tiêu
-function getgenv().ESP_API.Create(targetModel)
-    local espObjects = {
-        Text = Drawing.new("Text"),
-        Tracer = Drawing.new("Line"),
-        Highlight = Instance.new("Highlight")
-    }
-    
-    -- Setup Text
-    espObjects.Text.Size = TEXT_SIZE
-    espObjects.Text.Center = true
-    espObjects.Text.Outline = true
-    espObjects.Text.ZIndex = 9999 -- [5] Chống bị các script khác đè mất
-    
-    -- Setup Tia/Dây
-    espObjects.Tracer.Thickness = 1
-    espObjects.Tracer.ZIndex = 9999
-    
-    -- Setup Highlight (Phát sáng)
-    espObjects.Highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop -- Luôn hiện xuyên tường
-    espObjects.Highlight.OutlineColor = Color3.fromRGB(255, 255, 255) -- [1] Viền luôn CỐ ĐỊNH MÀU TRẮNG
-    espObjects.Highlight.OutlineTransparency = 0
-    espObjects.Highlight.FillTransparency = 0.5
-    
-    -- Giấu Highlight vào CoreGui để chống game phát hiện/xóa
-    local success = pcall(function()
-        espObjects.Highlight.Parent = CoreGui
-    end)
-    if not success then
-        espObjects.Highlight.Parent = targetModel 
-    end
+-- ================= DANH SÁCH SOUND TRIGER ================= --
+local TRIGGER_SOUND_IDS = {
+	["12222225"] = true,
+	["83851356262523"] = true, 
+}
 
-    return espObjects
+-- ================= CẤU HÌNH ================= --
+local TOTAL_SWORDS = 7          
+local SPAWN_DELAY = 0.3         
+local FALL_HEIGHT = 50          
+local FALL_DURATION = 1.0       
+local radius = 4.5              
+local speed = 1.5               
+local heightOffset = 0          
+local ATTACK_RANGE = 300        
+
+local RAINBOW_COLORS = {
+	Color3.fromRGB(255, 0, 0),     
+	Color3.fromRGB(255, 127, 0),   
+	Color3.fromRGB(255, 255, 0),   
+	Color3.fromRGB(0, 255, 0),     
+	Color3.fromRGB(0, 0, 255),     
+	Color3.fromRGB(75, 0, 130),    
+	Color3.fromRGB(148, 0, 211)    
+}
+
+local orbitingSwords = {}
+local isDying = false           
+local isAttacking = false       
+local auraConnections = {} 
+local isAuraActive = false 
+local isCurrentlyShedletsky = false 
+
+-- ================= HÀM DỌN DẸP KIẾM NHANH ================= --
+local function clearSwords()
+	for _, data in ipairs(orbitingSwords) do
+		if data.Object then data.Object:Destroy() end
+		if data.FlyValue then data.FlyValue:Destroy() end
+	end
+	table.clear(orbitingSwords)
 end
 
--- Hàm cập nhật khung hình 
--- Thêm tham số `buttonSettings` để mỗi nút truyền cài đặt riêng (màu sắc, bật/tắt) của nút đó vào
-function getgenv().ESP_API.Update(espObjects, targetModel, targetName, localPlayerPos, buttonSettings)
-    -- Nếu mục tiêu chết hoặc mất RootPart thì ẩn hết
-    if not targetModel or not targetModel:FindFirstChild("HumanoidRootPart") then
-        espObjects.Text.Visible = false
-        espObjects.Tracer.Visible = false
-        espObjects.Highlight.Enabled = false
-        return
-    end
+-- ================= HÀM XỬ LÝ KIẾM ================= --
+local function cloneVisibleSword()
+	if not swordTemplate then return nil, nil end 
+	
+	local clone = swordTemplate:Clone()
+	
+	local originCount = #swordTemplate:GetDescendants()
+	local cloneCount = #clone:GetDescendants()
+	
+	if cloneCount < originCount or cloneCount == 0 then
+		clone:Destroy()
+		return nil, nil
+	end
+	
+	clone.Name = "OrbitingSword"
+	local parts = {}
+	
+	local function processPart(part)
+		if part:IsA("BasePart") then
+			local lowerName = part.Name:lower()
+			if lowerName:find("hitbox") or lowerName:find("sensor") or lowerName:find("damager") then
+				part.Transparency = 1
+			else
+				table.insert(parts, part)
+			end
+		end
+	end
 
-    local rootPart = targetModel.HumanoidRootPart
-    local humanoid = targetModel:FindFirstChildOfClass("Humanoid")
-    
-    local pos, onScreen = Camera:WorldToViewportPoint(rootPart.Position)
-    local distance = (localPlayerPos - rootPart.Position).Magnitude
-    
-    -- [1] Lấy màu từ cài đặt CỦA TỪNG NÚT truyền vào (mặc định là trắng nếu lỗi)
-    local nodeColor = buttonSettings.Color or Color3.fromRGB(255, 255, 255)
-
-    -- Xử lý Highlight
-    if buttonSettings.Highlight_Enabled then
-        espObjects.Highlight.Enabled = true
-        espObjects.Highlight.FillColor = nodeColor -- Màu trong chạy theo màu của nút
-        espObjects.Highlight.Adornee = targetModel -- Liên tục bám sát
-    else
-        espObjects.Highlight.Enabled = false
-    end
-
-    -- Xử lý Text & Tracer (Chỉ vẽ nếu mục tiêu nằm trong màn hình)
-    if onScreen then
-        -- Xử lý Text
-        if buttonSettings.Text_Enabled then
-            local textStr = targetName
-            
-            -- [3] Logic hiển thị Text theo khoảng cách và máu
-            if buttonSettings.Show_Distance and not buttonSettings.Show_Health then
-                textStr = textStr .. " [" .. math.floor(distance) .. "m]"
-            elseif not buttonSettings.Show_Distance and buttonSettings.Show_Health and humanoid then
-                textStr = textStr .. " [HP : " .. math.floor(humanoid.Health) .. "/" .. math.floor(humanoid.MaxHealth) .. "]"
-            elseif buttonSettings.Show_Distance and buttonSettings.Show_Health and humanoid then
-                textStr = textStr .. " [" .. math.floor(distance) .. "m] [HP : " .. math.floor(humanoid.Health) .. "/" .. math.floor(humanoid.MaxHealth) .. "]"
-            end
-            
-            espObjects.Text.Text = textStr
-            espObjects.Text.Position = Vector2.new(pos.X, pos.Y - 25) -- Lệch lên trên
-            espObjects.Text.Color = nodeColor -- Text chạy theo màu của nút
-            espObjects.Text.Visible = true
-        else
-            espObjects.Text.Visible = false
-        end
-
-        -- Xử lý Tia
-        if buttonSettings.Tracer_Enabled then
-            espObjects.Tracer.From = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y)
-            espObjects.Tracer.To = Vector2.new(pos.X, pos.Y)
-            espObjects.Tracer.Color = nodeColor -- Tia chạy theo màu của nút
-            espObjects.Tracer.Visible = true
-        else
-            espObjects.Tracer.Visible = false
-        end
-    else
-        espObjects.Text.Visible = false
-        espObjects.Tracer.Visible = false
-    end
+	if clone:IsA("BasePart") then processPart(clone) end
+	for _, desc in pairs(clone:GetDescendants()) do
+		processPart(desc)
+	end
+	
+	if #parts == 0 then
+		clone:Destroy()
+		return nil, nil
+	end
+	
+	for _, part in ipairs(parts) do
+		part.Anchored = true
+		part.CanCollide = false
+		part.Massless = true
+		part.Transparency = 1 
+	end
+	
+	for _, desc in pairs(clone:GetDescendants()) do
+		if desc:IsA("JointInstance") or desc:IsA("WeldConstraint") or desc:IsA("LuaSourceContainer") then
+			desc:Destroy()
+		end
+	end
+	
+	if clone:IsA("Model") and not clone.PrimaryPart then
+		clone.PrimaryPart = parts[1]
+	end
+	
+	clone.Parent = Workspace  
+	return clone, parts
 end
 
--- Hàm dọn dẹp khi tắt
-function getgenv().ESP_API.Remove(espObjects)
-    if espObjects then
-        if espObjects.Text then espObjects.Text:Remove() end
-        if espObjects.Tracer then espObjects.Tracer:Remove() end
-        if espObjects.Highlight then espObjects.Highlight:Destroy() end
-    end
+local function spawnSwordSequentially(index)
+	local sword, parts = cloneVisibleSword()
+	
+	if not sword then
+		task.delay(0.5, function()
+			if isAuraActive and isCurrentlyShedletsky then
+				spawnSwordSequentially(index)
+			end
+		end)
+		return 
+	end
+	
+	local glow = Instance.new("Highlight")
+	glow.Name = "RainbowGlow"
+	glow.Adornee = sword
+	glow.FillTransparency = 1             
+	glow.OutlineTransparency = 0          
+	glow.OutlineColor = RAINBOW_COLORS[index] 
+	glow.Parent = sword
+	
+	local angle = (index - 1) * (math.pi * 2 / TOTAL_SWORDS)
+	
+	local flyProgress = Instance.new("NumberValue")
+	flyProgress.Name = "FlyProgress"
+	flyProgress.Value = 0 
+	flyProgress.Parent = sword
+
+	local swordData = {
+		Object = sword,
+		Parts = parts,
+		Angle = angle,
+		State = "Falling",
+		CurrentOffset = FALL_HEIGHT,
+		FlyValue = flyProgress,
+		TargetCharacter = nil 
+	}
+	table.insert(orbitingSwords, swordData)
+	
+	for _, part in ipairs(parts) do 
+		part.Transparency = 0 
+	end
+	
+	local currentChar = localPlayer.Character
+	if currentChar and currentChar:FindFirstChild("HumanoidRootPart") then
+		local sound = Instance.new("Sound")
+		sound.SoundId = SWORD_SOUND_ID
+		sound.Volume = 0.6
+		sound.Parent = currentChar.HumanoidRootPart
+		sound:Play()
+		task.delay(2, function() sound:Destroy() end)
+	end
+	
+	local fallValue = Instance.new("NumberValue")
+	fallValue.Value = FALL_HEIGHT
+	local tweenInfo = TweenInfo.new(FALL_DURATION, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out)
+	local tween = TweenService:Create(fallValue, tweenInfo, {Value = 0})  
+	tween:Play()
+	
+	fallValue.Changed:Connect(function(newValue)
+		swordData.CurrentOffset = newValue
+	end)
+	
+	tween.Completed:Connect(function()
+		if swordData.State ~= "Ascending" then
+			swordData.State = "Orbiting"
+		end
+		fallValue:Destroy()
+	end)
 end
+
+-- ================= TÌM KILLER GẦN NHẤT ================= --
+local function getNearestKillerCharacter()
+	local currentChar = localPlayer.Character
+	if not currentChar or not currentChar:FindFirstChild("HumanoidRootPart") then return nil end
+	local playerRoot = currentChar.HumanoidRootPart
+	
+	local nearestChar = nil
+	local minDistance = ATTACK_RANGE
+
+	for _, kPlayer in ipairs(killersFolder:GetChildren()) do
+		if kPlayer:IsA("Player") or kPlayer.ClassName == "ObjectValue" or kPlayer:IsA("Model") then
+			local char = kPlayer:IsA("Player") and kPlayer.Character or kPlayer
+			if char and char:IsA("Model") then
+				local humanoid = char:FindFirstChild("Humanoid")
+				local root = char:FindFirstChild("HumanoidRootPart")
+				if humanoid and humanoid.Health > 0 and root then
+					local dist = (root.Position - playerRoot.Position).Magnitude
+					if dist < minDistance then
+						minDistance = dist
+						nearestChar = char
+					end
+				end
+			end
+		end
+	end
+	return nearestChar
+end
+
+-- ================= HÀM ĐIỀU KHIỂN PHÓNG / THU KIẾM ================= --
+local function executeAttack(killerChar)
+	isAttacking = true
+	
+	for i, data in ipairs(orbitingSwords) do
+		if data.State == "Ascending" then continue end
+		task.delay((i - 1) * 0.1, function() 
+			data.TargetCharacter = killerChar
+			TweenService:Create(data.FlyValue, TweenInfo.new(0.5, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Value = 1}):Play()
+		end)
+	end
+
+	task.wait(0.5 + 3.0)
+
+	for i, data in ipairs(orbitingSwords) do
+		if data.State == "Ascending" then continue end
+		task.delay((i - 1) * 0.1, function()
+			local tween = TweenService:Create(data.FlyValue, TweenInfo.new(0.5, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {Value = 0})
+			tween:Play()
+			tween.Completed:Connect(function()
+				data.TargetCharacter = nil 
+			end)
+		end)
+	end
+
+	task.wait(0.5)
+	isAttacking = false
+end
+
+-- ================= HỆ THỐNG CHECK SOUND KÍCH HOẠT ================= --
+local function checkSound(sound)
+	if sound:IsA("Sound") then
+		local soundDigits = sound.SoundId:match("%d+$")
+		
+		if soundDigits and TRIGGER_SOUND_IDS[soundDigits] then
+			if not isAttacking and not isDying and isCurrentlyShedletsky then
+				local targetKiller = getNearestKillerCharacter()
+				if targetKiller then
+					task.spawn(function()
+						executeAttack(targetKiller)
+					end)
+				end
+			end
+		end
+	end
+end
+
+-- ================= HÀM QUẢN LÝ BẬT / TẮT AURA ================= --
+local function cleanUpAura()
+	isAuraActive = false 
+	isCurrentlyShedletsky = false
+	
+	for _, conn in pairs(auraConnections) do
+		if conn then conn:Disconnect() end
+	end
+	table.clear(auraConnections)
+	
+	clearSwords()
+	
+	isDying = false
+	isAttacking = false
+end
+
+local function startAura()
+	cleanUpAura() 
+	isAuraActive = true
+	
+	task.spawn(function()
+		if not swordTemplate then
+			local shedletsky = survivorsFolder:WaitForChild("Shedletsky", 5)
+			if shedletsky then
+				swordTemplate = shedletsky:WaitForChild("Sword", 5)
+			end
+		end
+		
+		if not swordTemplate then
+			warn("Không tìm thấy kiếm gốc!")
+			return
+		end
+		
+		if not isAuraActive then return end 
+		
+		table.insert(auraConnections, Workspace.DescendantAdded:Connect(checkSound))
+		table.insert(auraConnections, SoundService.DescendantAdded:Connect(checkSound))
+		
+		table.insert(auraConnections, localPlayer.CharacterAdded:Connect(function()
+			isCurrentlyShedletsky = false 
+			isDying = false
+			isAttacking = false
+			clearSwords()
+		end))
+		
+		table.insert(auraConnections, RunService.RenderStepped:Connect(function()  
+			local myCharacter = localPlayer.Character  
+			if not myCharacter then return end
+			
+			local isShedletskyNow = (myCharacter.Name == "Shedletsky")
+			
+			if isShedletskyNow and not isCurrentlyShedletsky then
+				isCurrentlyShedletsky = true
+				isDying = false
+				isAttacking = false
+				clearSwords()
+				
+				task.spawn(function()
+					task.wait(1)
+					if not isCurrentlyShedletsky or not isAuraActive then return end 
+					
+					for i = 1, TOTAL_SWORDS do
+						task.delay((i - 1) * SPAWN_DELAY, function()
+							if isAuraActive and isCurrentlyShedletsky then
+								spawnSwordSequentially(i)
+							end
+						end)
+					end
+				end)
+				
+			elseif not isShedletskyNow and isCurrentlyShedletsky then
+				isCurrentlyShedletsky = false
+				clearSwords()
+			end
+
+			if not isCurrentlyShedletsky then return end
+			
+			local myHumanoid = myCharacter:FindFirstChild("Humanoid")
+			local myRoot = myCharacter:FindFirstChild("HumanoidRootPart")
+			if not myHumanoid or not myRoot then return end
+			
+			if myHumanoid.Health <= 0 then
+				if not isDying then
+					isDying = true
+					for _, data in ipairs(orbitingSwords) do
+						data.State = "Ascending"
+						local cframeVal = Instance.new("CFrameValue")
+						cframeVal.Value = data.Object:GetPivot()
+						
+						local ascendTween = TweenService:Create(cframeVal,  
+							TweenInfo.new(1.5, Enum.EasingStyle.Exponential, Enum.EasingDirection.In), 
+							{Value = cframeVal.Value * CFrame.new(0, 100, 0)})
+						
+						cframeVal.Changed:Connect(function(newCFrame)
+							if data.Object and data.Object.Parent then
+								data.Object:PivotTo(newCFrame)
+							end
+						end)
+						ascendTween:Play()
+						task.delay(1.5, function()
+							if data.Object then data.Object:Destroy() end
+							cframeVal:Destroy()
+						end)
+					end
+				end
+				return 
+			end
+			
+			local now = tick()
+			
+			for _, data in ipairs(orbitingSwords) do
+				if data.State == "Ascending" then continue end 
+				
+				local orbitAngle = data.Angle + (speed * now)
+				
+				local selfX = myRoot.Position.X + math.cos(orbitAngle) * radius
+				local selfZ = myRoot.Position.Z + math.sin(orbitAngle) * radius
+				local selfY = myRoot.Position.Y + heightOffset + data.CurrentOffset
+				local selfPos = Vector3.new(selfX, selfY, selfZ)
+				
+				local killerPos = selfPos 
+				if data.TargetCharacter and data.TargetCharacter:FindFirstChild("HumanoidRootPart") then
+					local kRoot = data.TargetCharacter.HumanoidRootPart
+					local kX = kRoot.Position.X + math.cos(orbitAngle) * radius
+					local kZ = kRoot.Position.Z + math.sin(orbitAngle) * radius
+					local kY = kRoot.Position.Y + heightOffset
+					killerPos = Vector3.new(kX, kY, kZ)
+				end
+				
+				local progress = data.FlyValue.Value
+				local finalPos = selfPos:Lerp(killerPos, progress)
+				
+				local currentCenter = myRoot.Position:Lerp(
+					(data.TargetCharacter and data.TargetCharacter:FindFirstChild("HumanoidRootPart") and data.TargetCharacter.HumanoidRootPart.Position or myRoot.Position), 
+					progress
+				)
+				
+				local lookAtPos = Vector3.new(
+					currentCenter.X + math.cos(orbitAngle + 0.1) * radius, 
+					finalPos.Y, 
+					currentCenter.Z + math.sin(orbitAngle + 0.1) * radius
+				)
+				
+				local finalCFrame = CFrame.lookAt(finalPos, lookAtPos) * CFrame.Angles(math.rad(90), 0, 0)
+				data.Object:PivotTo(finalCFrame)
+			end
+		end))
+	end)
+end
+
+-- XUẤT HÀM RA GETGENV ĐỂ TRUY CẬP ĐƯỢC TỪ FILE KHÁC
+getgenv().HutaoAuraSword.Start = startAura
+getgenv().HutaoAuraSword.Stop = cleanUpAura
