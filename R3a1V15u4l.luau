@@ -561,3 +561,305 @@ end
 -- XUẤT HÀM RA GETGENV ĐỂ TRUY CẬP ĐƯỢC TỪ FILE KHÁC
 getgenv().HutaoAuraSword.Start = startAura
 getgenv().HutaoAuraSword.Stop = cleanUpAura
+
+-- Full Misc
+
+-- Khởi tạo Database nếu chưa có
+if not getgenv().MiscModule then
+    getgenv().MiscModule = {
+        Settings = {
+            FullBright = false, Fog = false, InfiniteZoom = false, AntiSlow = false, ShowChat = false,
+            RemoveNPCNoli = false, AntiAFK = true, RemoveEffects = false, RemoveBlackScreen = true, AntiAdmin = true
+        },
+        Constants = {
+            DefaultCamera = { Max = 128, Min = 0.5 },
+            EffectNames = {
+                BlurEffect = true, ColorCorrectionEffect = true, BloomEffect = true, SunRaysEffect = true,
+                DepthOfFieldEffect = true, ScreenFlash = true, HitEffect = true, DamageOverlay = true,
+                BloodEffect = true, Vignette = true, BlackScreen = true, WhiteScreen = true,
+                ShockEffect = true, Darkness = true, JumpScare = true, LowHealthOverlay = true,
+                Flashbang = true, FadeEffect = true
+            },
+            EffectClasses = {
+                BlurEffect = true, BloomEffect = true, SunRaysEffect = true, 
+                DepthOfFieldEffect = true, ColorCorrectionEffect = true
+            },
+            AntiSlowConfigs = {
+                {"SlowedStatus"},
+                {"StunningKiller", "EatFriedChicken", "GuestBlocking", "PunchAbility", "SubspaceTripmine", "TaphTripwire", "PlasmaBeam", "SpawnProtection", "c00lgui", "ShootingGun", "TwoTimeStab", "TwoTimeCrouching", "DrinkingCola", "DrinkingSlateskin", "SlateskinStatus", "EatingGhostburger"},
+                {"BloxyColaItem", "Medkit"},
+                {"Emoting"},
+                {"DispenserConstruction", "SentryConstruction"}
+            },
+            AdminNames = {
+                "Enoderen", "SoyS3BASTIAN", "aateeer", "sayso_1230", "fractalintersection", 
+                "KeyAfterKey", "Exedious", "Agrovient", "isaac3523", "Proffessor738", "Roblox"
+            }
+        },
+        Cache = {
+            EffectCons = {}, BlackScreenCons = {}, AntiAFKCons = {}, AntiAFKConn = nil,
+            ChatWindow = game:GetService("TextChatService"):FindFirstChild("ChatWindowConfiguration"),
+            AntiAdminLoop = nil, NoliTracked = {}
+        }
+    }
+end
+
+local M = getgenv().MiscModule
+local UI = getgenv().WindUI or WindUI -- Đảm bảo gọi được WindUI từ Global
+
+-- Khởi tạo API cho GUI gọi
+getgenv().HutaoMiscAPI = {}
+local API = getgenv().HutaoMiscAPI
+
+-- ================= CÁC HÀM XỬ LÝ NỘI BỘ ================= --
+local function ApplyVisuals()
+    if M.Settings.FullBright then
+        Lighting.Ambient = Color3.fromRGB(200, 200, 200)
+        Lighting.Brightness = 4
+        Lighting.GlobalShadows = false
+    end
+    if M.Settings.Fog then
+        Lighting.FogStart = 0
+        Lighting.FogEnd = 999999
+        local atmosphere = Lighting:FindFirstChildOfClass("Atmosphere")
+        if atmosphere then atmosphere.Density = 0 atmosphere.Haze = 0 end
+    end
+    if M.Settings.InfiniteZoom then
+        localPlayer.CameraMaxZoomDistance = math.huge
+        localPlayer.CameraMinZoomDistance = M.Constants.DefaultCamera.Min
+    end
+end
+
+local function ResetFullBright()
+    Lighting.Ambient = Color3.fromRGB(128, 128, 128)
+    Lighting.Brightness = 1
+    Lighting.GlobalShadows = true
+end
+
+local function ResetFog()
+    Lighting.FogStart = 200
+    Lighting.FogEnd = 1000
+    local atmosphere = Lighting:FindFirstChildOfClass("Atmosphere")
+    if atmosphere then atmosphere.Density = 0.3 atmosphere.Haze = 0.5 end
+end
+
+local function ResetZoom()
+    localPlayer.CameraMaxZoomDistance = M.Constants.DefaultCamera.Max
+    localPlayer.CameraMinZoomDistance = M.Constants.DefaultCamera.Min
+end
+
+local function processAntiSlow()
+    if not M.Settings.AntiSlow or not localPlayer.Character then return end
+    local speedFolder = localPlayer.Character:FindFirstChild("SpeedMultipliers")
+    if speedFolder then
+        for _, group in ipairs(M.Constants.AntiSlowConfigs) do
+            for i = 1, #group do
+                local obj = speedFolder:FindFirstChild(group[i])
+                if obj and obj:IsA("NumberValue") and obj.Value ~= 1 then obj.Value = 1 end
+            end
+        end
+    end
+    local pg = localPlayer:FindFirstChild("PlayerGui")
+    if pg then
+        local mainUI = pg:FindFirstChild("MainUI")
+        local status = mainUI and mainUI:FindFirstChild("StatusContainer")
+        local slowUI = status and status:FindFirstChild("Slowness")
+        if slowUI then slowUI.Visible = false end
+    end
+end
+
+local function processRemoveNoli()
+    if not M.Settings.RemoveNPCNoli then 
+        table.clear(M.Cache.NoliTracked) return 
+    end
+    for model, _ in pairs(M.Cache.NoliTracked) do
+        if not model or not model.Parent then M.Cache.NoliTracked[model] = nil end
+    end
+    for _, v in ipairs(workspace:GetDescendants()) do
+        if v:IsA("Model") and v.Name == "Noli" then
+            if Players:GetPlayerFromCharacter(v) then
+                M.Cache.NoliTracked[v] = nil
+            elseif v:FindFirstChildOfClass("Humanoid") then
+                if not M.Cache.NoliTracked[v] then M.Cache.NoliTracked[v] = tick()
+                elseif tick() - M.Cache.NoliTracked[v] >= 5 then
+                    pcall(v.Destroy, v)
+                    M.Cache.NoliTracked[v] = nil
+                end
+            end
+        end
+    end
+end
+
+local function processAntiAdmin()
+    if not M.Settings.AntiAdmin then return end
+    local myName = localPlayer.Name
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player.Name ~= myName and table.find(M.Constants.AdminNames, player.Name) then
+            pcall(function()
+                if UI then UI:Notify({ Title = "hutaohub:Anti_Admin_Forsaken", Content = "hutaohub:Anti_Admin_Forsaken_Content", Duration = 3, Icon = "shield" }) end
+            end)
+            warn("[AntiAdmin] Phát hiện admin: " .. player.Name .. " - Server hop sau 1 giây.")
+            task.wait(1)
+            pcall(function() TeleportService:Teleport(game.PlaceId, localPlayer) end)
+            return
+        end
+    end
+end
+
+local function TryRemoveEffect(obj)
+    if not M.Settings.RemoveEffects or not obj or not obj.Parent then return end
+    local remove = M.Constants.EffectNames[obj.Name] or M.Constants.EffectClasses[obj.ClassName]
+    if not remove and (obj:IsA("ScreenGui") or obj:IsA("BillboardGui") or obj:IsA("SurfaceGui")) then
+        local lname = string.lower(obj.Name)
+        remove = string.find(lname, "overlay") or string.find(lname, "effect")
+    end
+    if remove then pcall(obj.Destroy, obj) end
+end
+
+local function TryRemoveBlackScreen(obj)
+    if not M.Settings.RemoveBlackScreen or not obj or not obj.Parent then return end
+    local nameLower = string.lower(obj.Name)
+    local isBlackTarget = (nameLower == "blackscreen") or (nameLower == "fadescreen") or (nameLower == "fadeeffect") or (nameLower == "darkness") or (nameLower == "loadinggui")
+    if not isBlackTarget and obj:IsA("Frame") then
+        isBlackTarget = string.find(nameLower, "black") or string.find(nameLower, "fade")
+    end
+    if isBlackTarget then pcall(obj.Destroy, obj) end
+end
+
+local function cleanAllBlackScreens()
+    if not M.Settings.RemoveBlackScreen then return end
+    local pg = localPlayer:FindFirstChild("PlayerGui")
+    if not pg then return end
+    for _, obj in ipairs(pg:GetDescendants()) do TryRemoveBlackScreen(obj) end
+end
+
+local function performAntiAFKAction()
+    pcall(function()
+        VirtualUser:CaptureController()
+        VirtualUser:Button2Down(Vector2.new(0, 0), workspace.CurrentCamera.CFrame)
+        task.wait(0.1)
+        VirtualUser:Button2Up(Vector2.new(0, 0), workspace.CurrentCamera.CFrame)
+    end)
+end
+
+-- ================= VÒNG LẶP BACKGROUND ================= --
+task.spawn(function()
+    while true do
+        if M.Settings.FullBright or M.Settings.Fog or M.Settings.InfiniteZoom then ApplyVisuals() end
+        processAntiSlow()
+        processRemoveNoli()
+        cleanAllBlackScreens()
+        task.wait(0.5)
+    end
+end)
+
+task.spawn(function()
+    while true do
+        if M.Settings.AntiAdmin then processAntiAdmin() end
+        task.wait(1)
+    end
+end)
+
+if M.Cache.ChatWindow then
+    M.Cache.ChatWindow:GetPropertyChangedSignal("Enabled"):Connect(function()
+        if M.Cache.ChatWindow.Enabled ~= M.Settings.ShowChat then
+            M.Cache.ChatWindow.Enabled = M.Settings.ShowChat
+        end
+    end)
+end
+
+-- ================= API PUBLIC CHO GUI ================= --
+function API.ServerHop()
+    local placeId = game.PlaceId
+    print("[ServerHop] Đang rời server hiện tại...")
+    local success, err = pcall(function() TeleportService:Teleport(placeId, localPlayer) end)
+    if success then
+        if UI then UI:Notify({ Title = "hutaohub:Rejoin_Starting", Content = "hutaohub:Rejoin_Starting_Content1", Duration = 3, Icon = "info" }) end
+    else
+        warn("[ServerHop] Lỗi khi Teleport:", err)
+        if UI then UI:Notify({ Title = "hutaohub:Teleport_Error", Content = tostring(err), Duration = 4, Icon = "alert" }) end
+    end
+end
+
+function API.SetFullBright(state)
+    M.Settings.FullBright = state
+    if state then ApplyVisuals() else ResetFullBright() end
+end
+
+function API.SetRemoveFog(state)
+    M.Settings.Fog = state
+    if state then ApplyVisuals() else ResetFog() end
+end
+
+function API.SetInfiniteZoom(state)
+    M.Settings.InfiniteZoom = state
+    if not state then ResetZoom() end
+end
+
+function API.SetRemoveEffects(state)
+    M.Settings.RemoveEffects = state
+    for i = 1, #M.Cache.EffectCons do M.Cache.EffectCons[i]:Disconnect() end
+    table.clear(M.Cache.EffectCons)
+
+    if not state then return end
+    local pg = localPlayer:FindFirstChild("PlayerGui")
+    if pg then
+        for _, obj in ipairs(pg:GetDescendants()) do TryRemoveEffect(obj) end
+        table.insert(M.Cache.EffectCons, pg.DescendantAdded:Connect(TryRemoveEffect))
+    end
+    for _, obj in ipairs(Lighting:GetDescendants()) do TryRemoveEffect(obj) end
+    table.insert(M.Cache.EffectCons, Lighting.DescendantAdded:Connect(TryRemoveEffect))
+end
+
+function API.SetRemoveBlackScreen(state)
+    M.Settings.RemoveBlackScreen = state
+    for i = 1, #M.Cache.BlackScreenCons do M.Cache.BlackScreenCons[i]:Disconnect() end
+    table.clear(M.Cache.BlackScreenCons)
+
+    if not state then return end
+    cleanAllBlackScreens()
+    local pg = localPlayer:FindFirstChild("PlayerGui")
+    if pg then table.insert(M.Cache.BlackScreenCons, pg.DescendantAdded:Connect(TryRemoveBlackScreen)) end
+end
+
+function API.SetAntiSlow(state) M.Settings.AntiSlow = state end
+function API.SetShowChat(state) 
+    M.Settings.ShowChat = state
+    if M.Cache.ChatWindow then M.Cache.ChatWindow.Enabled = state end
+end
+
+function API.SetAntiScreenRec(state)
+    if type(setfflag) ~= "function" then return end
+    pcall(function()
+        setfflag("AbuseReportScreenshot", state and "False" or "True")
+        setfflag("AbuseReportScreenshotPercentage", state and "0" or "100")
+    end)
+end
+
+function API.SetRemoveFakeNoli(state) M.Settings.RemoveNPCNoli = state end
+function API.SetAntiAdmin(state) M.Settings.AntiAdmin = state end
+
+function API.SetAntiAFK(state)
+    M.Settings.AntiAFK = state
+    if not getconnections then return end
+    local idleCons = getconnections(localPlayer.Idled)
+
+    if state then
+        for _, c in ipairs(idleCons) do
+            M.Cache.AntiAFKCons[c] = true
+            pcall(c.Disable, c)
+        end
+        if M.Cache.AntiAFKConn then M.Cache.AntiAFKConn:Disconnect() end
+        M.Cache.AntiAFKConn = localPlayer.Idled:Connect(performAntiAFKAction)
+    else
+        for c in pairs(M.Cache.AntiAFKCons) do
+            if c and c.Enable then pcall(c.Enable, c) end
+        end
+        M.Cache.AntiAFKCons = {}
+        if M.Cache.AntiAFKConn then
+            M.Cache.AntiAFKConn:Disconnect()
+            M.Cache.AntiAFKConn = nil
+        end
+    end
+end
+
